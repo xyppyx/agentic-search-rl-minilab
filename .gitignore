@@ -47,6 +47,13 @@ htmlcov/
 03-search-r1/eval_result/
 03-search-r1/.env*
 !03-search-r1/.env.example
+my-search-r1/.env*
+!my-search-r1/.env.example
+my-search-r1/datasets/
+my-search-r1/eval_results/
+my-search-r1/outputs/
+my-search-r1/checkpoints/
+my-search-r1/swanlog/
 nosetests.xml
 coverage.xml
 *.cover

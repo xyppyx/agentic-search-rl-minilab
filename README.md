@@ -1,110 +1,70 @@
-<div align="center">
+# LLM Agent RL Lab 改进项目
 
-<a href="https://github.com/KMnO4-zx/llm-agent-rl-lab">
-  <img src="images/llm-agent-rl-lab.png" alt="LLM Agent RL Lab" width=100% />
-</a>
+本仓库基于原作者 `KMnO4-zx/llm-agent-rl-lab` 的教学复现代码，用于学习和改造 LLM/Agent 强化学习算法。当前个人主线是 Search-R1 改进项目：
 
-<h1><i>LLM Agent RL Lab</i></h1>
+```text
+Robust Search-R1 MiniLab:
+低成本、多工具、不可靠环境下的搜索型 Agent RL 实验框架
+```
 
-<p>
-  复现和拆解前沿 LLM 强化学习算法，用更简单的代码和更低的 GPU 门槛，把 GRPO、OPD、GSPO、DAPO、Search-R1、Slime 等方法跑起来，方便复现。
-</p>
+设计草案见 [docs/design/idea.md](docs/design/idea.md)。后续正式改进实现默认放在 [my-search-r1/](my-search-r1/)；上游 Search-R1 教学复现保留在 [03-search-r1/](03-search-r1/) 作为基线参考。
 
-<p>
-  <a href="https://pytrio.cn/"><img alt="PyTRIO" src="https://img.shields.io/badge/PyTRIO-Remote%20Training-d94a45?style=flat" /></a>
-  <a href="https://swanlab.cn/"><img alt="SwanLab" src="https://img.shields.io/badge/SwanLab-Experiment%20Tracking-258f4b?style=flat" /></a>
-  <a href="https://swanlab.cn/@kmno4/llm-agent-rl-lab/overview"><img alt="SwanLab Experiments" src="https://img.shields.io/badge/Tracking_in-SwanLab-C4F042?style=flat&amp;labelColor=000000" /></a>
-  <a href="https://www.zhihu.com/people/feng-qi-xia-pian"><img alt="Zhihu" src="https://img.shields.io/badge/Zhihu-知乎-4362f6?style=flat" /></a>
-  <a href="https://www.xiaohongshu.com/user/profile/63c2055e000000002502c58c"><img alt="Rednote" src="https://img.shields.io/badge/Rednote-小红书-e93c49?style=flat" /></a>
-  <a href="https://github.com/KMnO4-zx/llm-agent-rl-lab"><img alt="visitors" src="https://komarev.com/ghpvc/?username=KMnO4-zx-llm-agent-rl-lab&amp;label=visitors&amp;color=1283c3&amp;style=flat" /></a>
-  <img alt="Python" src="https://img.shields.io/badge/Python-3.13%2B-306998?style=flat" />
-</p>
+## 项目边界
 
-</div>
+- `00-loss-function/`、`01-grpo/`、`02-opd/`、`03-search-r1/`：原教学复现内容，用于理解算法和对照基线。
+- `my-search-r1/`：本项目改进实现区，优先承载工具封装、trajectory 记录、鲁棒工具环境、reward 组件化和后续训练后端封装。
+- `docs/`：设计、状态事实源、学习记录和实验复盘。
 
-## 这个仓库是什么？
+本项目是个人学习型 POC，不代表 PyTRIO、SwanLab、知乎开放平台、Search-R1 官方实现或原作者参与、委托或认可。
 
-这是一个偏实验记录和教程的仓库。我会用 PyTRIO 复现一组和 LLM / Agent RL 相关的强化学习算法，主要做三件事：
+## 当前路线
 
-1. 先把算法讲明白：它从哪篇论文来，解决什么问题，核心变量是什么。
-2. 再用可运行代码复现：数据、reward、loss、训练循环、SwanLab 记录都放在仓库里。
-3. 可能未来会做一个更友好和轻量的 Agent RL 训练框架～
+近期最小版本目标：
 
-我选择 PyTRIO 的原因很简单：研究这些算法时，我更想比较 loss、reward、group size、学习率和采样参数，而不是先维护一套 8 卡训练服务。PyTRIO 把训练、采样、LoRA 权重保存和远端资源管理托管掉，本地代码就可以专注在实验逻辑上。
+```text
+让 Search-R1 smoke/5-step run 产生可复查的 trajectory JSONL 和报告。
+```
 
-## 文章目录
+优先级来自 [docs/design/idea.md](docs/design/idea.md)：
 
-| 篇章 | 主题 | 内容 |
-| --- | --- | --- |
-| [第 0 篇](./00-loss-function/readme.md) | Loss Function | 用直觉解释 `importance_sampling`、`ppo`、`cispo` 分别在优化什么 |
-| [第 1 篇](./01-grpo/readme.md) | GRPO | 复现 GSM8K 上的 GRPO，并比较 `importance_sampling` / `ppo` / `cispo` 三个 loss |
-| [第 2 篇](./02-opd/general-opd/readme.md) | General OPD | 用 DeepMath-103K 跑通 Student 采样、Teacher 打分与 reverse KL 的最小闭环 |
-| [第 2 篇](./02-opd/readme.md) | Medical OPD | 从 Medical SFT 出发，用 SAR-OPD 和 IDT-OPD 增强医疗能力，同时保持通用能力 |
-| [第 3 篇](./03-search-r1/readme.md) | Search-R1 | 用 Qwen3.5-4B、PyTRIO 和知乎搜索 API 复现多轮搜索 RL |
-
+1. 搜索工具封装 + 轨迹可视化。
+2. reward / penalty 组件化。
+3. 概率失败工具环境。
+4. PyTRIO 后端薄封装。
+5. 阶段化训练。
 
 ## 快速启动
 
-如果是直接 clone 这个仓库：
+依赖使用 `uv` 管理：
 
 ```bash
-git clone https://github.com/KMnO4-zx/llm-agent-rl-lab.git
-cd llm-agent-rl-lab
 uv sync
 ```
 
-如果只想把某个 demo 脚本拎到自己的项目里跑：
+运行现有上游 Search-R1 基线前，需要进入 `03-search-r1/` 并按该目录说明配置 `.env`。真实 API key、远程训练凭据、SwanLab 私有链接、模型权重和 checkpoint 不得提交。
 
 ```bash
-uv add "datasets>=5.0.0" "matplotlib>=3.11.0" "numpy>=2.5.1" "openai>=2.44.0" "python-dotenv>=1.2.2" "pytrio==0.2.2" "swanlab>=0.8.4" "torch>=2.12.1" "tqdm>=4.68.3"
+cd 03-search-r1
+uv run python prepare_data.py
 ```
 
-## 目录结构
+`my-search-r1/` 目前用于承接改进实现；新增脚本应优先提供 smoke run 参数和可复现的输出路径。
 
-```text
-├── 00-loss-function/
-│   ├── readme.md
-│   └── images/
-├── 01-grpo/
-│   ├── 01-demo-sync.py
-│   ├── 02-demo-async.py
-│   ├── readme.md
-│   └── images/
-├── 02-opd/
-│   ├── general-opd/
-│   │   ├── 01-demo-sync.py
-│   │   ├── 02-demo-async.py
-│   │   ├── readme.md
-│   │   └── images/
-│   ├── 00-download-dataset.py
-│   ├── 01-eval-ceval.py
-│   ├── 01-eval-medical.py
-│   ├── 02-medical-sft.py
-│   ├── 03-medical-opd-sync.py
-│   ├── 03-medical-opd-async.py
-│   ├── 04-ceval-opd-async.py
-│   ├── 05-interleaved-multi-teacher-opd.py
-│   ├── readme.md
-│   └── images/
-├── 03-search-r1/
-│   ├── .env.example
-│   ├── prepare_data.py
-│   ├── data.py
-│   ├── protocol.py
-│   ├── search.py
-│   ├── rollout.py
-│   ├── reward.py
-│   ├── train.py
-│   ├── eval.py
-│   ├── analyse.py
-│   ├── readme.md
-│   └── images/
-├── images/
-│   └── llm-agent-rl-lab.png
-├── pyproject.toml
-└── README.md
-```
+## 协作规范
+
+- 仓库规则见 [AGENTS.md](AGENTS.md)。
+- 项目状态事实源在 [docs/status/](docs/status/)。
+- 开始任务前读取适用的 `AGENTS.md`、`PROJECT_COMPLETED.md` 和 `PROJECT_TODO.md`。
+- 完成可独立验证的产物、实验结果或关键决策后同步更新状态文件。
+
+## 上游来源
+
+原项目：
+
+- GitHub: <https://github.com/KMnO4-zx/llm-agent-rl-lab>
+- Search-R1 论文: <https://arxiv.org/abs/2503.09516>
+- Search-R1 官方实现: <https://github.com/PeterGriffinJin/Search-R1>
 
 ## License
 
-See [LICENSE](./LICENSE).
+See [LICENSE](LICENSE).

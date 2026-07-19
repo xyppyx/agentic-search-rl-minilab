@@ -1,0 +1,6 @@
+{"id":"doc-1","title":"Antoine de Saint-Exupery","content":"Antoine de Saint-Exupery wrote The Little Prince and was born in Lyon France.","url":"https://example.test/saint-exupery","source":"fixture"}
+{"id":"doc-2","title":"The Little Prince","content":"The Little Prince is a novella by French writer Antoine de Saint-Exupery.","url":"https://example.test/little-prince","source":"fixture"}
+{"id":"doc-3","title":"Ada Lovelace","content":"Ada Lovelace is often regarded as an early computer programmer.","url":"https://example.test/ada","source":"fixture"}
+{"id":"doc-4","title":"Paris","content":"Paris is the capital and most populous city of France.","url":"https://example.test/paris","source":"fixture"}
+{"id":"doc-5","title":"HotpotQA","content":"HotpotQA contains multi-hop question answering examples requiring reasoning over documents.","url":"https://example.test/hotpotqa","source":"fixture"}
+{"id":"doc-6","title":"Search-R1","content":"Search-R1 trains language models to reason and use search engines with reinforcement learning.","url":"https://example.test/search-r1","source":"fixture"}

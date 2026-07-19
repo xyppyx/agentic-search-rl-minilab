@@ -4,24 +4,20 @@
 
 ## 近期任务
 
-- 初始化 `my-search-r1/` 改进实现骨架。
-  - 验收条件：明确包结构、配置入口、工具 backend 接口、trajectory schema 和 smoke run 命令。
-  - 当前状态：待开始。
-
 - 从 `03-search-r1/` 基线迁移最小可运行 Search-R1 smoke/eval 链路。
   - 验收条件：在不依赖真实付费搜索服务的 mock backend 下，可生成 trajectory JSONL 和 Markdown 报告。
   - 当前状态：待开始。
 
-- 实现搜索工具封装与 mock backend。
-  - 验收条件：rollout 只依赖统一工具接口，可切换 Zhihu/mock backend，并记录工具调用指标。
+- 将 `my-search-r1` 工具层接入真实 rollout。
+  - 验收条件：rollout 通过 `ToolRegistry` 调用 `mock_search`、`local_bm25` 或 `zhihu_search`，不直接依赖具体搜索 client，并输出同一 trajectory JSONL schema。
   - 当前状态：待开始。
 
-- 实现 trajectory JSONL 保存与基础报告。
-  - 验收条件：训练或评测可输出 correct、wrong、invalid_format、tool_failure 等分类案例报告。
-  - 当前状态：待开始。
+- 增加公开 smoke 配置与命令入口。
+  - 验收条件：无需真实 API key，可用 mock 或 local BM25 跑一个端到端 rollout smoke，并输出固定路径产物。
+  - 当前状态：工具 smoke 已完成，模型 rollout smoke 待开始。
 
 ## 未解决风险
 
-- `my-search-r1/` 当前尚未放入可运行代码，需要先定义从基线复制、迁移或重写的边界。
+- `my-search-r1/` 当前已有搜索工具层、trajectory JSONL 和报告能力，但尚未接入模型 rollout、训练或评测。
 - 真实知乎搜索 API、PyTRIO 远程训练和 SwanLab 记录依赖外部凭据与服务状态，后续实验需要 mock baseline 与真实 backend 指标分开记录。
 - 当前已有 `03-search-r1/train.py` 本地改动，后续修改基线文件前需要继续保护这部分改动。

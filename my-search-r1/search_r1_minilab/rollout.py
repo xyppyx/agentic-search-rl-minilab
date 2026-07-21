@@ -283,6 +283,7 @@ def score_trajectory(
         exact_match=result.exact_match,
         valid_format=result.valid_format,
         stop_reason=trajectory.stop_reason,
+        question=trajectory.example.question,
     )
     answer_token_count = (
         token_count(tokenizer, result.answer) if result.answer is not None else 0
@@ -292,6 +293,7 @@ def score_trajectory(
         diagnostics,
         reward_shaping,
         answer_token_count=answer_token_count,
+        references=trajectory.example.answers,
     )
     trajectory.reward = components.final_reward
     trajectory.valid_format = result.valid_format

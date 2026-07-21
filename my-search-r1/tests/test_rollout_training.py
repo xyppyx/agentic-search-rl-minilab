@@ -229,6 +229,34 @@ class TrainingRolloutTest(unittest.TestCase):
         self.assertEqual(short_correct.reward_components["verbose_answer_penalty"], 0.0)
         self.assertEqual(short_correct.reward, 1.0)
 
+    def test_v3_answer_penalties_apply_to_wrong_final_answers(self) -> None:
+        date = Trajectory(
+            example=SearchExample("q-date", "When was the person born?", ["October 2, 1869"], "test"),
+            group_index=0,
+            messages=[],
+            final_text="Answer: 1869",
+            stop_reason="answer",
+        )
+        multi = Trajectory(
+            example=SearchExample("q-multi", "Who was the director?", ["Barry Cook"], "test"),
+            group_index=0,
+            messages=[],
+            final_text="Answer: Barry Cook or Liu Bicheng",
+            stop_reason="answer",
+        )
+        config = RewardShapingConfig(
+            date_granularity_penalty=0.05,
+            multi_candidate_answer_penalty=0.02,
+        )
+
+        score_trajectory(date, FakeTokenizer(), config)
+        score_trajectory(multi, FakeTokenizer(), config)
+
+        self.assertEqual(date.reward_components["date_granularity_penalty"], 0.05)
+        self.assertEqual(multi.reward_components["multi_candidate_answer_penalty"], 0.02)
+        self.assertAlmostEqual(date.reward, -0.05)
+        self.assertAlmostEqual(multi.reward, -0.02)
+
     def test_evaluation_metrics_include_behavior_rates(self) -> None:
         direct = Trajectory(
             example=SearchExample("q8", "Question?", ["A"], "test"),

@@ -53,6 +53,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--duplicate-query-penalty", type=float, default=0.0)
     parser.add_argument("--empty-result-penalty", type=float, default=0.0)
     parser.add_argument("--max-search-no-answer-penalty", type=float, default=0.0)
+    parser.add_argument("--bad-max-search-penalty", type=float, default=0.0)
+    parser.add_argument("--date-granularity-penalty", type=float, default=0.0)
+    parser.add_argument("--multi-candidate-answer-penalty", type=float, default=0.0)
     parser.add_argument("--verbose-answer-penalty", type=float, default=0.0)
     parser.add_argument("--verbose-answer-token-threshold", type=int, default=0)
     parser.add_argument("--temperature", type=float, default=0.0)
@@ -133,6 +136,9 @@ def _reward_shaping_config(args: argparse.Namespace) -> RewardShapingConfig:
         duplicate_query_penalty=args.duplicate_query_penalty,
         empty_result_penalty=args.empty_result_penalty,
         max_search_no_answer_penalty=args.max_search_no_answer_penalty,
+        bad_max_search_penalty=args.bad_max_search_penalty,
+        date_granularity_penalty=args.date_granularity_penalty,
+        multi_candidate_answer_penalty=args.multi_candidate_answer_penalty,
         verbose_answer_penalty=args.verbose_answer_penalty,
         verbose_answer_token_threshold=args.verbose_answer_token_threshold,
     )

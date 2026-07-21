@@ -17,7 +17,7 @@
 - `configs/`：可公开的 smoke/eval/train 配置模板。
 - `scripts/`：数据准备、rollout、训练、评测和报告命令入口。
 
-实现前以 [../03-search-r1/](../03-search-r1/) 为基线参考，以 [../docs/design/idea.md](../docs/design/idea.md) 为路线依据。真实凭据写入本地 `.env`，公开模板写入 `.env.example`。
+实现前以 [../03-search-r1/](../03-search-r1/) 为基线参考，以 [../docs/design/idea.md](../docs/design/idea.md) 为路线依据。reward shaping 版本和下一轮实验计划维护在 [../docs/design/reward_shaping_plan.md](../docs/design/reward_shaping_plan.md)。真实凭据写入本地 `.env`，公开模板写入 `.env.example`。
 
 ## 当前已实现
 
@@ -44,6 +44,8 @@
 - `scripts/train_pytrio.py`：PyTRIO GRPO 训练入口，默认 local BM25 和公开 fixture，可跑 1-step smoke。
 - `scripts/analyse_trajectories.py`：从已有 trajectory JSONL 生成 Markdown 报告。
 - `scripts/analyse_checkpoints.py`：从 eval JSONL 生成 checkpoint EM/format 对比图，兼容 summary JSONL 和纯 trajectory JSONL。
+- `scripts/analyse_offline_diagnostics.py`：从 eval JSONL 离线标注 alias、答案粒度和 missing follow-up query 风险。
+- `scripts/analyse_reward_sensitivity.py`：从 eval JSONL 离线重评分，对比不同 reward penalty 配置的分布影响和误伤风险。
 
 运行工具层测试：
 
@@ -125,3 +127,34 @@ PYTHONPATH=my-search-r1 uv run python my-search-r1/scripts/analyse_checkpoints.p
 默认会优先使用原 Search-R1 checkpoint 文件名；如果目录里只有
 `trajectories.jsonl`，会自动按 `Current=trajectories.jsonl` 生成单点图。
 也可以重复传入 `--checkpoint 'Step 20=eval_results_rl_step_20.jsonl'` 指定列表。
+
+运行离线诊断：
+
+```bash
+PYTHONPATH=my-search-r1 uv run python my-search-r1/scripts/analyse_offline_diagnostics.py \
+  --input my-search-r1/eval_results/reward_train_compare_2026-07-21/base_20step_dev.jsonl \
+  --jsonl-output my-search-r1/eval_results/reward_train_compare_2026-07-21/base_20step_offline_diagnostics.jsonl \
+  --report-output my-search-r1/eval_results/reward_train_compare_2026-07-21/base_20step_offline_diagnostics.md
+```
+
+运行 reward 敏感性分析：
+
+```bash
+PYTHONPATH=my-search-r1 uv run python my-search-r1/scripts/analyse_reward_sensitivity.py \
+  --input my-search-r1/eval_results/reward_train_compare_2026-07-21/base_20step_dev.jsonl \
+  --summary-output my-search-r1/eval_results/reward_train_compare_2026-07-21/base_20step_reward_sensitivity_summary.json \
+  --jsonl-output my-search-r1/eval_results/reward_train_compare_2026-07-21/base_20step_reward_sensitivity.jsonl \
+  --report-output my-search-r1/eval_results/reward_train_compare_2026-07-21/base_20step_reward_sensitivity.md
+```
+
+默认对比 `base_reward_v0`、`penalty_v1`、`penalty_v2_candidate` 和
+`penalty_v2_no_empty`。可重复传入 `--config` 做小规模自定义配置：
+
+```bash
+PYTHONPATH=my-search-r1 uv run python my-search-r1/scripts/analyse_reward_sensitivity.py \
+  --input my-search-r1/eval_results/reward_train_compare_2026-07-21/base_20step_dev.jsonl \
+  --config 'dup_only:duplicate=0.02,empty=0,max_search=0,verbose=0,verbose_threshold=0' \
+  --summary-output /tmp/reward_sensitivity_summary.json \
+  --jsonl-output /tmp/reward_sensitivity.jsonl \
+  --report-output /tmp/reward_sensitivity.md
+```

@@ -721,7 +721,7 @@ requires-dist = [
     { name = "openai", specifier = ">=2.44.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "pytrio", specifier = "==0.2.2" },
-    { name = "swanlab", specifier = ">=0.8.4" },
+    { name = "swanlab", specifier = ">=0.9.0" },
     { name = "torch", specifier = ">=2.9.1", index = "https://download.pytorch.org/whl/cpu" },
     { name = "tqdm", specifier = ">=4.68.3" },
 ]
@@ -1399,6 +1399,12 @@ wheels = [
 ]
 
 [[package]]
+name = "pwinput"
+version = "1.0.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4b/c9/f6d03c2214c282251baa38c6be08f5b9f81f1ea488716cd2335e7e190b58/pwinput-1.0.3.tar.gz", hash = "sha256:ca1a8bd06e28872d751dbd4132d8637127c25b408ea3a349377314a5491426f3", size = 4433, upload-time = "2023-02-16T17:04:14.592Z" }
+
+[[package]]
 name = "pyarrow"
 version = "24.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1832,7 +1838,7 @@ wheels = [
 
 [[package]]
 name = "swanlab"
-version = "0.8.4"
+version = "0.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -1841,6 +1847,7 @@ dependencies = [
     { name = "platformdirs" },
     { name = "protobuf" },
     { name = "psutil" },
+    { name = "pwinput" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyecharts" },
@@ -1852,9 +1859,9 @@ dependencies = [
     { name = "watchdog" },
     { name = "wrapt" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c9/05/b4f6ac1e7bf2868e01fb367368b7968d55018783d0d23da7340663461b65/swanlab-0.8.4.tar.gz", hash = "sha256:81089d319133341e00bb0bb602c2ca2a2a94c64373498dd40e7ad804cea4c89a", size = 14758408, upload-time = "2026-06-29T08:33:38.379Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ae/65/6f12e5717f635334a49d4d1b97e1aa486b2f1d9f8e26964bb9199d461289/swanlab-0.9.0.tar.gz", hash = "sha256:ada084dcca38046e32d5e01e047f63d5ca2569128571a6c508a2f69c56b79d50", size = 14769818, upload-time = "2026-07-16T05:17:08.225Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ce/a4/566ec4b4b9bf3d57a82772e3281a8344c1843a5cd14e158f1962c5896c80/swanlab-0.8.4-py3-none-any.whl", hash = "sha256:a096c98d3a72e50ab2939214123e1fcdd2660dfc2ee1963d362111dd815a47c3", size = 495241, upload-time = "2026-06-29T08:33:36.71Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/1e/32ae71ef7b03abe353ffd4860713e203afb2a97bad02d259820d1a794581/swanlab-0.9.0-py3-none-any.whl", hash = "sha256:e0573af328881b1edefc49ffddde4898b96eae0db5ec8657a19482aaca3f7a15", size = 504155, upload-time = "2026-07-16T05:17:06.086Z" },
 ]
 
 [[package]]

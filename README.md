@@ -7,7 +7,7 @@ Robust Search-R1 MiniLab:
 低成本、多工具、不可靠环境下的搜索型 Agent RL 实验框架
 ```
 
-设计草案见 [docs/design/idea.md](docs/design/idea.md)。后续正式改进实现默认放在 [my-search-r1/](my-search-r1/)；上游 Search-R1 教学复现保留在 [03-search-r1/](03-search-r1/) 作为基线参考。
+设计草案见 [docs/design/idea.md](docs/design/idea.md)，reward 设计版本与下一轮实验计划见 [docs/design/reward_shaping_plan.md](docs/design/reward_shaping_plan.md)。后续正式改进实现默认放在 [my-search-r1/](my-search-r1/)；上游 Search-R1 教学复现保留在 [03-search-r1/](03-search-r1/) 作为基线参考。
 
 ## 项目边界
 
@@ -25,7 +25,7 @@ Robust Search-R1 MiniLab:
 让 Search-R1 smoke/5-step run 产生可复查的 trajectory JSONL 和报告。
 ```
 
-优先级来自 [docs/design/idea.md](docs/design/idea.md)：
+优先级来自 [docs/design/idea.md](docs/design/idea.md) 和 [docs/design/reward_shaping_plan.md](docs/design/reward_shaping_plan.md)：
 
 1. 搜索工具封装 + 轨迹可视化。
 2. reward / penalty 组件化。

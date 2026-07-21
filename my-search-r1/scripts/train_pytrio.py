@@ -10,7 +10,6 @@ from time import perf_counter
 from typing import Any
 
 import pytrio as trio
-import swanlab
 from dotenv import load_dotenv
 from tqdm import tqdm
 
@@ -35,6 +34,8 @@ DEFAULT_DATA = ROOT / "tests" / "fixtures" / "smoke_eval.jsonl"
 DEFAULT_BM25_CORPUS = ROOT / "tests" / "fixtures" / "bm25_corpus.jsonl"
 DEFAULT_ENV_FILE = ROOT / ".env"
 DEFAULT_OUTPUT_DIR = ROOT / "outputs" / "train_pytrio"
+DEFAULT_SWANLAB_PROJECT = "llm-agent-rl-lab-search-r1"
+_SWANLAB_MODULE: Any | None = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -56,6 +57,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--duplicate-query-penalty", type=float, default=0.0)
     parser.add_argument("--empty-result-penalty", type=float, default=0.0)
     parser.add_argument("--max-search-no-answer-penalty", type=float, default=0.0)
+    parser.add_argument("--bad-max-search-penalty", type=float, default=0.0)
+    parser.add_argument("--date-granularity-penalty", type=float, default=0.0)
+    parser.add_argument("--multi-candidate-answer-penalty", type=float, default=0.0)
     parser.add_argument("--verbose-answer-penalty", type=float, default=0.0)
     parser.add_argument("--verbose-answer-token-threshold", type=int, default=0)
     parser.add_argument("--temperature", type=float, default=1.0)
@@ -66,7 +70,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save-every", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--run-name", default="search-r1-minilab")
-    parser.add_argument("--swanlab-project", default="llm-agent-rl-lab-search-r1")
+    parser.add_argument("--swanlab-project")
     parser.add_argument(
         "--swanlab-mode",
         choices=["online", "local", "offline", "disabled"],
@@ -88,6 +92,7 @@ def main(args: argparse.Namespace | None = None) -> None:
     """Run the full on-policy training loop."""
     args = args or parse_args()
     load_dotenv(args.env_file)
+    args.swanlab_project = _resolve_swanlab_project(args.swanlab_project)
 
     examples = shuffled_examples(args.data, args.seed, limit=args.max_train_samples)
     registry = build_registry(_backend_config(args))
@@ -232,22 +237,38 @@ def serializable_config(args: argparse.Namespace) -> dict[str, Any]:
 def _init_swanlab(args: argparse.Namespace) -> Any:
     if args.swanlab_mode == "disabled":
         return _DisabledRun()
-    return swanlab.init(
-        project=args.swanlab_project,
-        name=args.run_name,
-        mode=args.swanlab_mode,
-        config=serializable_config(args),
-    )
+    global _SWANLAB_MODULE
+    project_env = os.environ.pop("SWANLAB_PROJECT", None)
+    try:
+        import swanlab
+
+        _SWANLAB_MODULE = swanlab
+        return swanlab.init(
+            project=args.swanlab_project,
+            name=args.run_name,
+            mode=args.swanlab_mode,
+            config=serializable_config(args),
+        )
+    finally:
+        if project_env is not None:
+            os.environ["SWANLAB_PROJECT"] = project_env
 
 
 def _log_swanlab(args: argparse.Namespace, metrics: dict[str, float], step: int) -> None:
     if args.swanlab_mode != "disabled":
-        swanlab.log(metrics, step=step)
+        if _SWANLAB_MODULE is None:
+            raise RuntimeError("swanlab run is not initialized")
+        _SWANLAB_MODULE.log(metrics, step=step)
 
 
 class _DisabledRun:
     def finish(self) -> None:
         return None
+
+
+def _resolve_swanlab_project(cli_project: str | None) -> str:
+    project = cli_project or os.getenv("SWANLAB_PROJECT") or DEFAULT_SWANLAB_PROJECT
+    return project.rsplit("/", maxsplit=1)[-1]
 
 
 def _backend_config(args: argparse.Namespace) -> BackendConfig:
@@ -268,6 +289,9 @@ def _reward_shaping_config(args: argparse.Namespace) -> RewardShapingConfig:
         duplicate_query_penalty=args.duplicate_query_penalty,
         empty_result_penalty=args.empty_result_penalty,
         max_search_no_answer_penalty=args.max_search_no_answer_penalty,
+        bad_max_search_penalty=args.bad_max_search_penalty,
+        date_granularity_penalty=args.date_granularity_penalty,
+        multi_candidate_answer_penalty=args.multi_candidate_answer_penalty,
         verbose_answer_penalty=args.verbose_answer_penalty,
         verbose_answer_token_threshold=args.verbose_answer_token_threshold,
     )

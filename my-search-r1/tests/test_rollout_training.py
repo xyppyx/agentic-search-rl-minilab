@@ -257,6 +257,40 @@ class TrainingRolloutTest(unittest.TestCase):
         self.assertAlmostEqual(date.reward, -0.05)
         self.assertAlmostEqual(multi.reward, -0.02)
 
+    def test_helpful_followup_bonus_applies_to_wrong_valid_answer(self) -> None:
+        trajectory = _helpful_followup_candidate(
+            final_text="Reasoning.\nAnswer: Aelia Paetina",
+            exact_answer="Sextus Aelius Catus",
+        )
+
+        score_trajectory(
+            trajectory,
+            FakeTokenizer(),
+            RewardShapingConfig(helpful_followup_bonus=0.02),
+        )
+
+        self.assertAlmostEqual(trajectory.reward, 0.02)
+        self.assertEqual(trajectory.reward_components["helpful_followup_bonus"], 0.02)
+
+    def test_helpful_followup_bonus_does_not_apply_to_correct_or_invalid(self) -> None:
+        correct = _helpful_followup_candidate(
+            final_text="Reasoning.\nAnswer: Sextus Aelius Catus",
+            exact_answer="Sextus Aelius Catus",
+        )
+        invalid = _helpful_followup_candidate(
+            final_text="No final answer",
+            exact_answer="Sextus Aelius Catus",
+        )
+        config = RewardShapingConfig(helpful_followup_bonus=0.02)
+
+        score_trajectory(correct, FakeTokenizer(), config)
+        score_trajectory(invalid, FakeTokenizer(), config)
+
+        self.assertEqual(correct.reward, 1.0)
+        self.assertEqual(correct.reward_components["helpful_followup_bonus"], 0.0)
+        self.assertEqual(invalid.reward, -0.1)
+        self.assertEqual(invalid.reward_components["helpful_followup_bonus"], 0.0)
+
     def test_evaluation_metrics_include_behavior_rates(self) -> None:
         direct = Trajectory(
             example=SearchExample("q8", "Question?", ["A"], "test"),
@@ -322,6 +356,46 @@ def _penalty_candidate(final_text: str) -> Trajectory:
                 "tool_call": {"name": "search", "query": "same"},
             },
             {"role": "tool", "tool_name": "search", "ok": True, "items": []},
+        ],
+    )
+
+
+def _helpful_followup_candidate(final_text: str, exact_answer: str) -> Trajectory:
+    return Trajectory(
+        example=SearchExample(
+            "q-follow",
+            "Who is the maternal grandfather of Claudia Antonia?",
+            [exact_answer],
+            "test",
+        ),
+        group_index=0,
+        messages=[],
+        search_calls=2,
+        final_text=final_text,
+        stop_reason="answer",
+        events=[
+            {
+                "role": "assistant",
+                "text": "",
+                "tool_call": {"name": "search", "query": "Claudia Antonia mother"},
+            },
+            {
+                "role": "tool",
+                "tool_name": "search",
+                "ok": True,
+                "items": [{"title": "Evidence"}],
+            },
+            {
+                "role": "assistant",
+                "text": "",
+                "tool_call": {"name": "search", "query": "Aelia Paetina father"},
+            },
+            {
+                "role": "tool",
+                "tool_name": "search",
+                "ok": True,
+                "items": [{"title": "Evidence"}],
+            },
         ],
     )
 

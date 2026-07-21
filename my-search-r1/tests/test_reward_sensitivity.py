@@ -198,6 +198,38 @@ class RewardSensitivityTest(unittest.TestCase):
         self.assertEqual(helpful_result.bad_max_search_penalty, 0.0)
         self.assertTrue(helpful_result.helpful_followup_query)
 
+    def test_v4_boosts_helpful_wrong_valid_followup_only(self) -> None:
+        configs = {config.name: config for config in default_sensitivity_configs()}
+        helpful_wrong = make_record(
+            answer="Aelia Paetina",
+            search_calls=2,
+            duplicate_query=True,
+            question="Who is the maternal grandfather of Claudia Antonia?",
+        )
+        helpful_wrong["turns"][2]["tool_call"]["query"] = "Aelia Paetina father"
+        helpful_wrong["turns"][2]["text"] = "<tool_call>Aelia Paetina father</tool_call>"
+        helpful_correct = make_record(
+            answer="Sextus Aelius Catus",
+            answers=["Sextus Aelius Catus"],
+            exact_match=True,
+            search_calls=2,
+            duplicate_query=True,
+            question="Who is the maternal grandfather of Claudia Antonia?",
+        )
+        helpful_correct["turns"][2]["tool_call"]["query"] = "Aelia Paetina father"
+        helpful_correct["turns"][2]["text"] = "<tool_call>Aelia Paetina father</tool_call>"
+
+        wrong_result = rescore_record(helpful_wrong, configs["reward_v4_followup_bonus"])
+        correct_result = rescore_record(helpful_correct, configs["reward_v4_followup_bonus"])
+
+        self.assertTrue(wrong_result.helpful_followup_query)
+        self.assertEqual(wrong_result.helpful_followup_bonus, 0.02)
+        self.assertAlmostEqual(wrong_result.final_reward, 0.02)
+        self.assertTrue(wrong_result.boosted)
+        self.assertEqual(correct_result.helpful_followup_bonus, 0.0)
+        self.assertEqual(correct_result.final_reward, 1.0)
+        self.assertFalse(correct_result.boosted)
+
     def test_max_search_penalty_applies_to_invalid_max_search_case(self) -> None:
         record = make_record(
             valid_format=False,
@@ -229,6 +261,9 @@ class RewardSensitivityTest(unittest.TestCase):
         self.assertEqual(v3.reward_shaping.date_granularity_penalty, 0.05)
         self.assertEqual(v3.reward_shaping.multi_candidate_answer_penalty, 0.02)
 
+        v4 = parse_sensitivity_config("v4:helpful_followup=0.02")
+        self.assertEqual(v4.reward_shaping.helpful_followup_bonus, 0.02)
+
         with self.assertRaises(ValueError):
             parse_sensitivity_config("bad:unknown=1")
         with self.assertRaises(ValueError):
@@ -252,6 +287,8 @@ class RewardSensitivityTest(unittest.TestCase):
         v1_summary = next(item for item in summaries if item.config_name == "penalty_v1")
         self.assertEqual(v1_summary.penalized_count, 1)
         self.assertEqual(v1_summary.correct_penalized_count, 0)
+        self.assertIn("reward_v4_followup_bonus", report)
+        self.assertIn("helpful_followup_bonus", report)
         self.assertIn("missing_followup", report)
         self.assertIn("# Sensitivity", report)
 

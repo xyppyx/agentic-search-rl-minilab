@@ -35,6 +35,7 @@ class RewardShapingConfig:
     bad_max_search_penalty: float = 0.0
     date_granularity_penalty: float = 0.0
     multi_candidate_answer_penalty: float = 0.0
+    helpful_followup_bonus: float = 0.0
 
     def __post_init__(self) -> None:
         penalties = {
@@ -49,6 +50,8 @@ class RewardShapingConfig:
         for name, value in penalties.items():
             if value < 0.0:
                 raise ValueError(f"{name} must be non-negative")
+        if self.helpful_followup_bonus < 0.0:
+            raise ValueError("helpful_followup_bonus must be non-negative")
         if self.verbose_answer_token_threshold < 0:
             raise ValueError("verbose_answer_token_threshold must be non-negative")
 
@@ -65,6 +68,7 @@ class RewardComponents:
     bad_max_search_penalty: float
     date_granularity_penalty: float
     multi_candidate_answer_penalty: float
+    helpful_followup_bonus: float
     final_reward: float
 
     def to_dict(self) -> dict[str, float]:
@@ -77,6 +81,7 @@ class RewardComponents:
             "bad_max_search_penalty": self.bad_max_search_penalty,
             "date_granularity_penalty": self.date_granularity_penalty,
             "multi_candidate_answer_penalty": self.multi_candidate_answer_penalty,
+            "helpful_followup_bonus": self.helpful_followup_bonus,
             "final_reward": self.final_reward,
         }
 
@@ -126,6 +131,7 @@ def apply_reward_shaping(
     bad_max_search_penalty = 0.0
     date_granularity_penalty = 0.0
     multi_candidate_answer_penalty = 0.0
+    helpful_followup_bonus = 0.0
 
     if not base.exact_match:
         if diagnostics.duplicate_query_count > 0:
@@ -148,6 +154,12 @@ def apply_reward_shaping(
                 date_granularity_penalty = config.date_granularity_penalty
             if _multi_candidate_answer(base.answer, references):
                 multi_candidate_answer_penalty = config.multi_candidate_answer_penalty
+        if (
+            base.valid_format
+            and diagnostics.helpful_followup_query
+            and not diagnostics.bad_max_search_loop
+        ):
+            helpful_followup_bonus = config.helpful_followup_bonus
 
     final_reward = (
         base.reward
@@ -158,6 +170,7 @@ def apply_reward_shaping(
         - bad_max_search_penalty
         - date_granularity_penalty
         - multi_candidate_answer_penalty
+        + helpful_followup_bonus
     )
     return RewardComponents(
         base_reward=base.reward,
@@ -168,6 +181,7 @@ def apply_reward_shaping(
         bad_max_search_penalty=bad_max_search_penalty,
         date_granularity_penalty=date_granularity_penalty,
         multi_candidate_answer_penalty=multi_candidate_answer_penalty,
+        helpful_followup_bonus=helpful_followup_bonus,
         final_reward=final_reward,
     )
 

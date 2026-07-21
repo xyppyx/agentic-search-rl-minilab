@@ -60,6 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bad-max-search-penalty", type=float, default=0.0)
     parser.add_argument("--date-granularity-penalty", type=float, default=0.0)
     parser.add_argument("--multi-candidate-answer-penalty", type=float, default=0.0)
+    parser.add_argument("--helpful-followup-bonus", type=float, default=0.0)
     parser.add_argument("--verbose-answer-penalty", type=float, default=0.0)
     parser.add_argument("--verbose-answer-token-threshold", type=int, default=0)
     parser.add_argument("--temperature", type=float, default=1.0)
@@ -292,6 +293,7 @@ def _reward_shaping_config(args: argparse.Namespace) -> RewardShapingConfig:
         bad_max_search_penalty=args.bad_max_search_penalty,
         date_granularity_penalty=args.date_granularity_penalty,
         multi_candidate_answer_penalty=args.multi_candidate_answer_penalty,
+        helpful_followup_bonus=args.helpful_followup_bonus,
         verbose_answer_penalty=args.verbose_answer_penalty,
         verbose_answer_token_threshold=args.verbose_answer_token_threshold,
     )

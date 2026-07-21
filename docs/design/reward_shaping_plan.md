@@ -21,6 +21,7 @@
 | `penalty_v2_plus_max_search_001` | 已完成 5-step | `duplicate_query_penalty=0.03`、`empty_result_penalty=0.01`、`max_search_no_answer_penalty=0.01`，关闭 verbose | 压住 v2 20-step 暴露出的 max-search 空转和格式退化 | 5-step Zhihu dev EM 0.3000、format 0.8714、平均搜索 1.4571、`too_many_search_no_gain_rate=0.1000`；但 offline diagnostics 显示 `missing_followup_query=5`、`answer_granularity_miss=2` | 作为高 format/高效率候选保留；先做 gained/lost review 或更温和 0.005 版本，不直接推 50-step |
 | `penalty_v2_plus_max_search_0005` | 已完成 5-step | `duplicate_query_penalty=0.03`、`empty_result_penalty=0.01`、`max_search_no_answer_penalty=0.005`，关闭 verbose | 验证比 0.01 更温和的 max-search penalty 是否减少过早回答和答案粒度风险 | 5-step Zhihu dev EM 0.2714、format 0.8143、平均搜索 1.5714、`too_many_search_no_gain_rate=0.1714`；offline diagnostics 显示 `missing_followup_query=5`、`answer_granularity_miss=0` | 不作为优先扩大训练候选；0.01 版本的 format/效率更好，但仍需 gained/lost review |
 | `penalty_v3_followup_aware` | 已完成 5-step | `duplicate_query_penalty=0.03`、`empty_result_penalty=0.01`、`bad_max_search_penalty=0.01`、`date_granularity_penalty=0.05`、`multi_candidate_answer_penalty=0.02`；关闭传统 max-search 和 verbose | 只扣明显搜索空转，并约束日期粒度和多候选答案 | 5-step Zhihu dev EM 0.3000、format 0.8571、平均搜索 1.5143、`bad_max_search_loop=2`、`answer_granularity_miss=0`、`multi_candidate_answer=1`，但 `missing_followup_query=6` | final answer 粒度/唯一性方向有效；follow-up 风险未解决。下一步做正向 follow-up bonus 或 prompt/rollout 约束 |
+| `reward_v4_followup_bonus` | 已完成离线 sensitivity，待训练 | 在 v3 基础上增加 `helpful_followup_bonus=0.02`；正确答案和 invalid format 不加 bonus | 从 penalty-only 转向正向行为信号，鼓励已经出现的有用 follow-up query | 在 v2_20、max001、max0005、v3 四份既有 Zhihu dev JSONL 上离线重评分，`correct_boosted=0`，bonus 只落在 wrong-valid helpful follow-up 样本；mean delta 约 `-0.0010` 到 `0.0006` | 通过离线预检查，进入 5-step 小预算训练门控；若知乎 API 出错立即停止 |
 
 ## Offline Diagnostics
 
@@ -225,6 +226,37 @@ verbose_answer_token_threshold=0
 - v3 追平 max001 的 EM，并显著减少日期粒度和多候选答案问题。
 - v3 没有解决必要二跳缺失，`missing_followup_query` 反而升至 6。
 - 下一版应从 penalty-only 转向正向 follow-up 信号：对多跳/关系题中引入关键中间实体的 query 给小 bonus，或在 rollout prompt 中要求先锁定中间实体再回答。
+
+### Step 6: Follow-up bonus v4
+
+验收状态：2026-07-21 已完成实现与离线 sensitivity，待 5-step 训练。
+
+候选配置：
+
+```text
+duplicate_query_penalty=0.03
+empty_result_penalty=0.01
+bad_max_search_penalty=0.01
+date_granularity_penalty=0.05
+multi_candidate_answer_penalty=0.02
+helpful_followup_bonus=0.02
+```
+
+离线预检查结果：
+
+| Run | mean_delta | helpful_bonus | boosted | correct_boosted | wrong_valid_boosted | missing_followup_boosted |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `v2_20` | 0.0001 | 14 | 14 | 0 | 14 | 0 |
+| `max001_5step` | -0.0003 | 7 | 7 | 0 | 7 | 0 |
+| `max0005_5step` | -0.0010 | 5 | 5 | 0 | 5 | 0 |
+| `v3_5step` | 0.0006 | 7 | 7 | 0 | 7 | 0 |
+
+决策：
+
+- v4 没有给正确样本加分，离线影响幅度很小，可以进入 5-step 小预算训练。
+- 该 bonus 不会直接修复已标为 `missing_followup_query` 的单搜索过早回答；它的作用是训练时鼓励模型保留有用 follow-up 行为。
+- 5-step 门槛：无知乎 API 错误、`EM >= 0.3000`、`format >= 0.82`、`missing_followup_query <= 6`、答案粒度风险不高于 v3。
+- 未达门槛则不扩大到 20-step；出现知乎 API 错误立即停止实验并总结。
 
 ## 面试叙事
 

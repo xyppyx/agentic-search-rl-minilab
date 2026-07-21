@@ -6,6 +6,13 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from search_r1_minilab.diagnostics import (
+    BehaviorSummary,
+    diagnose_record,
+    summarize_diagnostics,
+)
+from search_r1_minilab.rewards import extract_answer
+
 
 @dataclass(frozen=True)
 class TrajectorySummary:
@@ -19,11 +26,13 @@ class TrajectorySummary:
     repeated_search: int
     average_reward: float | None
     average_search_calls: float
+    behavior: BehaviorSummary
 
 
 def classify_trajectory(record: dict[str, Any]) -> set[str]:
     """Classify one trajectory into report buckets."""
     labels: set[str] = set()
+    diagnostics = diagnose_record(record)
     if record.get("exact_match") is True:
         labels.add("correct")
     elif record.get("valid_format") is False:
@@ -33,8 +42,24 @@ def classify_trajectory(record: dict[str, Any]) -> set[str]:
 
     if int(record.get("tool_failures") or 0) > 0 or _has_failed_tool_turn(record):
         labels.add("tool_failure")
-    if _repeated_queries(record):
+    if diagnostics.repeated_search:
         labels.add("repeated_search")
+    if diagnostics.direct_correct:
+        labels.add("direct_correct")
+    if diagnostics.searched_correct:
+        labels.add("searched_correct")
+    if diagnostics.searched_wrong:
+        labels.add("searched_wrong")
+    if diagnostics.direct_wrong:
+        labels.add("direct_wrong")
+    if diagnostics.searched_invalid_format:
+        labels.add("searched_invalid_format")
+    if diagnostics.empty_search:
+        labels.add("empty_search")
+    if diagnostics.max_search_no_answer:
+        labels.add("max_search_no_answer")
+    if diagnostics.too_many_search_no_gain:
+        labels.add("too_many_search_no_gain")
     return labels
 
 
@@ -53,6 +78,7 @@ def summarize_trajectories(records: Iterable[dict[str, Any]]) -> TrajectorySumma
             reward_count += 1
         search_calls += int(record.get("search_calls") or 0)
     total = len(materialized)
+    diagnostics = [diagnose_record(record) for record in materialized]
     return TrajectorySummary(
         total=total,
         correct=label_counts["correct"],
@@ -62,6 +88,7 @@ def summarize_trajectories(records: Iterable[dict[str, Any]]) -> TrajectorySumma
         repeated_search=label_counts["repeated_search"],
         average_reward=(reward_sum / reward_count if reward_count else None),
         average_search_calls=search_calls / max(total, 1),
+        behavior=summarize_diagnostics(diagnostics),
     )
 
 
@@ -87,6 +114,26 @@ def build_markdown_report(
         f"| Invalid format | {summary.invalid_format} |",
         f"| Tool failure | {summary.tool_failure} |",
         f"| Repeated search | {summary.repeated_search} |",
+        f"| Direct correct | {summary.behavior.direct_correct} |",
+        f"| Searched correct | {summary.behavior.searched_correct} |",
+        f"| Searched wrong | {summary.behavior.searched_wrong} |",
+        f"| Direct wrong | {summary.behavior.direct_wrong} |",
+        f"| Searched invalid format | {summary.behavior.searched_invalid_format} |",
+        f"| Empty search trajectories | {summary.behavior.empty_search} |",
+        f"| Empty observations | {summary.behavior.empty_observation_count} |",
+        f"| Duplicate query trajectories | {summary.behavior.duplicate_query} |",
+        f"| Duplicate query count | {summary.behavior.duplicate_query_count} |",
+        f"| Max-search no-answer | {summary.behavior.max_search_no_answer} |",
+        f"| Too many search no gain | {summary.behavior.too_many_search_no_gain} |",
+        f"| Tool observations | {summary.behavior.tool_observation_count} |",
+        f"| Pending tool calls | {summary.behavior.pending_tool_call_count} |",
+        f"| Direct correct rate | {_format_rate(summary.behavior.direct_correct, summary.total)} |",
+        f"| Searched correct rate | {_format_rate(summary.behavior.searched_correct, summary.total)} |",
+        f"| Searched wrong rate | {_format_rate(summary.behavior.searched_wrong, summary.total)} |",
+        f"| Empty observation rate | {_format_rate(summary.behavior.empty_observation_count, summary.behavior.tool_observation_count)} |",
+        f"| Duplicate query rate | {_format_rate(summary.behavior.duplicate_query, summary.total)} |",
+        f"| Max-search no-answer rate | {_format_rate(summary.behavior.max_search_no_answer, summary.total)} |",
+        f"| Too many search no gain rate | {_format_rate(summary.behavior.too_many_search_no_gain, summary.total)} |",
         f"| Average reward | {_format_optional_float(summary.average_reward)} |",
         f"| Average search calls | {summary.average_search_calls:.2f} |",
         "",
@@ -101,6 +148,12 @@ def build_markdown_report(
         ("invalid_format", "Invalid Format Cases"),
         ("tool_failure", "Tool Failure Cases"),
         ("repeated_search", "Repeated Search Cases"),
+        ("direct_correct", "Direct Correct Cases"),
+        ("searched_correct", "Searched Correct Cases"),
+        ("searched_wrong", "Searched Wrong Cases"),
+        ("empty_search", "Empty Search Cases"),
+        ("max_search_no_answer", "Max-Search No-Answer Cases"),
+        ("too_many_search_no_gain", "Too Many Search No Gain Cases"),
     ]:
         lines.extend(
             _example_section(
@@ -116,7 +169,21 @@ def build_markdown_report(
 
 def _bucket_table(records: list[dict[str, Any]]) -> list[str]:
     rows = ["| Bucket | Count |", "| --- | ---: |"]
-    for label in ["correct", "wrong", "invalid_format", "tool_failure", "repeated_search"]:
+    for label in [
+        "correct",
+        "wrong",
+        "invalid_format",
+        "tool_failure",
+        "repeated_search",
+        "direct_correct",
+        "searched_correct",
+        "searched_wrong",
+        "direct_wrong",
+        "searched_invalid_format",
+        "empty_search",
+        "max_search_no_answer",
+        "too_many_search_no_gain",
+    ]:
         rows.append(
             f"| {label} | {sum(1 for record in records if label in classify_trajectory(record))} |"
         )
@@ -183,16 +250,23 @@ def _group_comparison_section(
 
 def _render_example(index: int, record: dict[str, Any]) -> list[str]:
     labels = ", ".join(sorted(classify_trajectory(record))) or "uncategorized"
+    diagnostics = diagnose_record(record)
     lines = [
         f"### Example {index}: {_one_line(record.get('question'))}",
         "",
         f"- Labels: `{labels}`",
+        f"- Gold answers: `{_one_line(record.get('answers'))}`",
+        f"- Extracted answer: `{extract_answer(_final_assistant_text(record))}`",
+        f"- Stop reason: `{_metadata_value(record, 'stop_reason')}`",
         f"- Reward: `{record.get('reward')}`",
         f"- Advantage: `{record.get('advantage')}`",
         f"- Exact match: `{record.get('exact_match')}`",
         f"- Valid format: `{record.get('valid_format')}`",
         f"- Search calls: `{int(record.get('search_calls') or 0)}`",
         f"- Tool failures: `{int(record.get('tool_failures') or 0)}`",
+        f"- Empty observations: `{diagnostics.empty_observation_count}`",
+        f"- Duplicate queries: `{diagnostics.duplicate_query_count}`",
+        f"- Pending tool calls: `{diagnostics.pending_tool_call_count}`",
         "",
         "```text",
         _final_assistant_text(record) or "[no assistant text]",
@@ -217,11 +291,6 @@ def _has_failed_tool_turn(record: dict[str, Any]) -> bool:
     return False
 
 
-def _repeated_queries(record: dict[str, Any]) -> bool:
-    queries = [query.lower().strip() for query in _tool_queries(record) if query.strip()]
-    return len(queries) != len(set(queries))
-
-
 def _tool_queries(record: dict[str, Any]) -> list[str]:
     queries: list[str] = []
     for turn in record.get("turns") or []:
@@ -231,6 +300,13 @@ def _tool_queries(record: dict[str, Any]) -> list[str]:
         if isinstance(tool_call, dict) and isinstance(tool_call.get("query"), str):
             queries.append(tool_call["query"])
     return queries
+
+
+def _metadata_value(record: dict[str, Any], key: str) -> Any:
+    metadata = record.get("metadata")
+    if isinstance(metadata, dict):
+        return metadata.get(key)
+    return None
 
 
 def _final_assistant_text(record: dict[str, Any]) -> str:
@@ -251,6 +327,10 @@ def _format_optional_float(value: Any) -> str:
     if isinstance(value, int | float):
         return f"{float(value):.4f}"
     return "-"
+
+
+def _format_rate(numerator: int, denominator: int) -> str:
+    return f"{(numerator / max(denominator, 1)):.4f}"
 
 
 def _escape_table(value: str) -> str:

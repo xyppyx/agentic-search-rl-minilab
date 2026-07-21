@@ -32,9 +32,18 @@
 - `search_r1_minilab/protocol.py`：Search-R1 chat template、工具调用解析和 tool message 构造。
 - `search_r1_minilab/rewards.py`：`Answer:` 格式校验与 exact-match reward。
 - `search_r1_minilab/rollout_smoke.py`：PyTRIO sampler + ToolRegistry 的最小 rollout/eval 状态机。
+- `search_r1_minilab/rollout.py`：训练级 group rollout，保存 old logprob、advantage 和可报告的 tool 事件。
+- `search_r1_minilab/training.py`：PyTRIO GRPO Datum 构建、micro-batch 装箱、advantage 权重缩放和训练指标。
+- `search_r1_minilab/tooling.py`：训练、评测和 smoke 共用的 backend 构造，支持 failure injection。
+- `search_r1_minilab/prepare_data.py`：固定 ModelScope 数据版本的 train/test/dev JSONL 准备逻辑。
+- `search_r1_minilab/analysis.py`：checkpoint eval JSONL 指标读取和 EM/format 曲线绘图。
+- `scripts/prepare_data.py`：下载并清洗 Search-R1 训练、测试和固定 dev 数据。
 - `scripts/tool_smoke.py`：无需模型或真实 API key，使用 mock/local BM25 生成 trajectory JSONL 和报告。
 - `scripts/rollout_smoke_eval.py`：使用 PyTRIO 真实模型采样，默认通过 local BM25 生成 trajectory JSONL 和 Markdown 报告。
+- `scripts/eval_pytrio.py`：base/checkpoint 共用的训练级 rollout 评测入口，输出统一 JSONL 与 Markdown 报告。
+- `scripts/train_pytrio.py`：PyTRIO GRPO 训练入口，默认 local BM25 和公开 fixture，可跑 1-step smoke。
 - `scripts/analyse_trajectories.py`：从已有 trajectory JSONL 生成 Markdown 报告。
+- `scripts/analyse_checkpoints.py`：从 eval JSONL 生成 checkpoint EM/format 对比图，兼容 summary JSONL 和纯 trajectory JSONL。
 
 运行工具层测试：
 
@@ -69,3 +78,50 @@ PYTHONPATH=my-search-r1 uv run python my-search-r1/scripts/analyse_trajectories.
   --input /tmp/search-r1-tool-smoke.jsonl \
   --output /tmp/search-r1-tool-smoke-report.md
 ```
+
+运行训练级 PyTRIO eval：
+
+```bash
+PYTHONPATH=my-search-r1 uv run python my-search-r1/scripts/eval_pytrio.py \
+  --backend local_bm25 \
+  --limit 2 \
+  --batch-size 1
+```
+
+运行 1-step PyTRIO GRPO train smoke：
+
+```bash
+PYTHONPATH=my-search-r1 uv run python my-search-r1/scripts/train_pytrio.py \
+  --max-steps 1 \
+  --questions-per-batch 1 \
+  --group-size 2 \
+  --backend local_bm25 \
+  --swanlab-mode disabled \
+  --run-name search-r1-minilab-smoke
+```
+
+训练和评测默认使用 `local_bm25`，可通过 `--backend mock_search` 或
+`--backend zhihu_search --env-file my-search-r1/.env` 切换。failure injection
+通过 `--p-timeout`、`--p-empty`、`--p-noise`、`--p-rate-limited` 和
+`--failure-seed` 控制。
+
+准备完整 Search-R1 数据：
+
+```bash
+PYTHONPATH=my-search-r1 uv run python my-search-r1/scripts/prepare_data.py
+```
+
+默认写入被 git 忽略的 `my-search-r1/datasets/`，包含 `train.jsonl`、
+`test.jsonl` 和按来源均衡抽样的 `dev.jsonl`。
+
+生成 checkpoint EM/format 对比图：
+
+```bash
+PYTHONPATH=my-search-r1 uv run python my-search-r1/scripts/analyse_checkpoints.py \
+  --result-dir my-search-r1/eval_results \
+  --output my-search-r1/eval_results/checkpoint_em_format.png
+```
+
+默认会优先使用原 Search-R1 checkpoint 文件名；如果目录里只有
+`trajectories.jsonl`，会自动按 `Current=trajectories.jsonl` 生成单点图。
+也可以重复传入 `--checkpoint 'Step 20=eval_results_rl_step_20.jsonl'` 指定列表。

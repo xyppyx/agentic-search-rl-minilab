@@ -58,11 +58,21 @@ def initial_messages(question: str) -> list[dict[str, Any]]:
 
 def build_prompt(tokenizer: Any, messages: list[dict[str, Any]]) -> list[int]:
     """Render messages with the model chat template and search tool definition."""
+    return _render_chat(tokenizer, messages, add_generation_prompt=True)
+
+
+def _render_chat(
+    tokenizer: Any,
+    messages: list[dict[str, Any]],
+    *,
+    add_generation_prompt: bool,
+) -> list[int]:
+    """Render messages and normalize tokenizer outputs to a flat token list."""
     rendered = tokenizer.apply_chat_template(
         messages,
         tools=[SEARCH_TOOL],
         tokenize=True,
-        add_generation_prompt=True,
+        add_generation_prompt=add_generation_prompt,
         enable_thinking=False,
     )
     if isinstance(rendered, Mapping):
@@ -72,6 +82,64 @@ def build_prompt(tokenizer: Any, messages: list[dict[str, Any]]) -> list[int]:
     if rendered and isinstance(rendered[0], list):
         rendered = rendered[0]
     return [int(token) for token in rendered]
+
+
+def _encoded_text_tokens(tokenizer: Any, text: str) -> list[int]:
+    """Encode plain text and normalize tokenizer outputs to a flat token list."""
+    encoded = tokenizer.encode(text, add_special_tokens=False)
+    if hasattr(encoded, "tolist"):
+        encoded = encoded.tolist()
+    if encoded and isinstance(encoded[0], list):
+        encoded = encoded[0]
+    return [int(token) for token in encoded]
+
+
+def _suffix_prefix_overlap(tokens: list[int], suffix: list[int]) -> int:
+    """Return the longest overlap between tokens suffix and suffix prefix."""
+    for length in range(min(len(tokens), len(suffix)), 0, -1):
+        if tokens[-length:] == suffix[:length]:
+            return length
+    return 0
+
+
+def build_next_prompt(
+    tokenizer: Any,
+    messages_before_assistant: list[dict[str, Any]],
+    assistant_text: str,
+    previous_prompt_tokens: list[int],
+    completion_tokens: list[int],
+    next_tool_message: dict[str, Any],
+) -> list[int]:
+    """Append assistant output and a tool observation without re-tokenizing sampled tokens."""
+    canonical_prompt = build_prompt(tokenizer, messages_before_assistant)
+    assistant_message = {"role": "assistant", "content": assistant_text}
+    messages_with_assistant = [*messages_before_assistant, assistant_message]
+    canonical_assistant_end = _render_chat(
+        tokenizer,
+        messages_with_assistant,
+        add_generation_prompt=False,
+    )
+    canonical_text_tokens = _encoded_text_tokens(tokenizer, assistant_text)
+    canonical_action = [*canonical_prompt, *canonical_text_tokens]
+    if canonical_assistant_end[: len(canonical_action)] != canonical_action:
+        raise ValueError("chat template cannot recover assistant message boundary")
+
+    assistant_closing_tokens = canonical_assistant_end[len(canonical_action) :]
+    canonical_next_prompt = build_prompt(
+        tokenizer,
+        [*messages_with_assistant, next_tool_message],
+    )
+    if canonical_next_prompt[: len(canonical_assistant_end)] != canonical_assistant_end:
+        raise ValueError("chat template rewrote history after tool observation")
+
+    observation_tokens = canonical_next_prompt[len(canonical_assistant_end) :]
+    overlap = _suffix_prefix_overlap(completion_tokens, assistant_closing_tokens)
+    return [
+        *previous_prompt_tokens,
+        *completion_tokens,
+        *assistant_closing_tokens[overlap:],
+        *observation_tokens,
+    ]
 
 
 def parse_assistant(text: str) -> ParsedAssistant:
@@ -107,9 +175,4 @@ def stop_sequences(tokenizer: Any) -> list[str]:
 
 def token_count(tokenizer: Any, text: str) -> int:
     """Count tokenizer tokens in plain text."""
-    tokens = tokenizer.encode(text, add_special_tokens=False)
-    if hasattr(tokens, "tolist"):
-        tokens = tokens.tolist()
-    if tokens and isinstance(tokens[0], list):
-        tokens = tokens[0]
-    return len(tokens)
+    return len(_encoded_text_tokens(tokenizer, text))

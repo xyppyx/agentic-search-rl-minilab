@@ -16,8 +16,7 @@ from search_r1_minilab.rollout_smoke import (
     load_examples,
     rollout_examples,
 )
-from search_r1_minilab.tools import LocalBM25Backend, MockSearchBackend, SearchItem, ToolRegistry
-from search_r1_minilab.tools.zhihu import ZhihuSearchBackend
+from search_r1_minilab.tooling import BackendConfig, build_registry
 from search_r1_minilab.trajectories import build_markdown_report, write_trajectory_jsonl
 
 
@@ -77,8 +76,13 @@ def main() -> None:
     args = parse_args()
     load_dotenv(args.env_file)
 
-    registry = ToolRegistry()
-    registry.register(_build_backend(args))
+    registry = build_registry(
+        BackendConfig(
+            backend=args.backend,
+            bm25_corpus=args.bm25_corpus,
+            env_file=args.env_file,
+        )
+    )
 
     service_client = trio.ServiceClient(api_key=os.getenv("PYTRIO_API_KEY") or None)
     sampling_client = service_client.create_sampling_client(
@@ -126,40 +130,6 @@ def main() -> None:
     print(json.dumps(metrics, ensure_ascii=False, indent=2, sort_keys=True))
     print(f"wrote {len(records)} trajectories to {args.jsonl_output}")
     print(f"wrote report to {args.report_output}")
-
-
-def _build_backend(args: argparse.Namespace):
-    if args.backend == "local_bm25":
-        return LocalBM25Backend.from_jsonl(args.bm25_corpus)
-    if args.backend == "mock_search":
-        return _default_mock_backend()
-    return ZhihuSearchBackend.from_env(args.env_file)
-
-
-def _default_mock_backend() -> MockSearchBackend:
-    return MockSearchBackend.from_pairs(
-        {
-            "little prince": [
-                SearchItem(
-                    id="mock-little-prince",
-                    title="The Little Prince",
-                    content="The Little Prince is by Antoine de Saint-Exupery.",
-                    url="https://example.test/little-prince",
-                    source="mock",
-                )
-            ],
-            "search-r1": [
-                SearchItem(
-                    id="mock-search-r1",
-                    title="Search-R1",
-                    content="Search-R1 trains language models to use search engines.",
-                    url="https://example.test/search-r1",
-                    source="mock",
-                )
-            ],
-        }
-    )
-
 
 if __name__ == "__main__":
     main()

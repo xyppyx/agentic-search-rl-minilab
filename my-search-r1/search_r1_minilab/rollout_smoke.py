@@ -17,6 +17,7 @@ from search_r1_minilab.protocol import (
     stop_sequences,
     token_count,
     tool_message,
+    tool_message_content,
 )
 from search_r1_minilab.rewards import score_answer
 from search_r1_minilab.tools.base import SearchResult, format_item
@@ -265,7 +266,8 @@ def _fit_tool_observation(
     accepted_content: str | None = None
     for candidate in candidates:
         content = "\n\n".join([*accepted, candidate])
-        if token_count(tokenizer, content) > config.max_tool_response_tokens:
+        tool_content = tool_message_content(content)
+        if token_count(tokenizer, tool_content) > config.max_tool_response_tokens:
             break
         next_messages = [*messages_with_assistant, tool_message(call_id, content)]
         if len(build_prompt(tokenizer, next_messages)) > config.max_trajectory_tokens:

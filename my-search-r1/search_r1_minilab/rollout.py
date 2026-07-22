@@ -19,6 +19,7 @@ from search_r1_minilab.protocol import (
     parse_assistant,
     stop_sequences,
     tool_message,
+    tool_message_content,
     token_count,
 )
 from search_r1_minilab.rewards import (
@@ -138,7 +139,8 @@ def fit_tool_content(
     accepted_prompt: list[int] | None = None
     for candidate in candidates:
         content = "\n\n".join([*accepted, candidate])
-        if token_count(tokenizer, content) > config.max_tool_response_tokens:
+        tool_content = tool_message_content(content)
+        if token_count(tokenizer, tool_content) > config.max_tool_response_tokens:
             break
         next_tool_message = tool_message(call_id, content)
         next_prompt = build_next_prompt(
@@ -247,22 +249,31 @@ def advance_trajectory(
     trajectory.messages.append({"role": "assistant", "content": text})
     result = registry.call(backend_name, {"query": parsed.query or ""})
     trajectory.search_calls += 1
-    fitted = fit_tool_content(
-        tokenizer,
-        messages_before_assistant,
-        text,
-        prompt_tokens,
-        tokens,
-        call_id,
-        result,
-        config,
-    )
+    prompt_reconstruction_failed = False
+    try:
+        fitted = fit_tool_content(
+            tokenizer,
+            messages_before_assistant,
+            text,
+            prompt_tokens,
+            tokens,
+            call_id,
+            result,
+            config,
+        )
+    except ValueError:
+        fitted = None
+        prompt_reconstruction_failed = True
     observation = fitted[0] if fitted is not None else ""
     trajectory.events.append(_tool_event(result, observation))
     if fitted is None:
         trajectory.final_text = text
         trajectory.done = True
-        trajectory.stop_reason = "tool_observation_budget"
+        trajectory.stop_reason = (
+            "prompt_reconstruction_failed"
+            if prompt_reconstruction_failed
+            else "tool_observation_budget"
+        )
         return
 
     content, next_prompt_tokens = fitted

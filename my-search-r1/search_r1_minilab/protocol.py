@@ -31,6 +31,7 @@ Do not answer from memory before seeing at least one search result.
 For multi-hop or relation questions, first identify the bridge entity, then search that entity or relation before answering.
 Call search exactly once per assistant turn. Wait for the tool result before making another search call.
 Do not stop after a search result that only identifies an intermediate person, work, place, date, role, or organization.
+Use at most three searches when possible. After three searches, answer with the best supported short span instead of asking for another search.
 When ready, output exactly one line and nothing else:
 Answer: <shortest single answer span>
 Do not include reasoning, markdown, citations, parentheses, alternatives, or words such as "or" after Answer:.
@@ -39,7 +40,8 @@ Do not call a tool and give the final answer in the same turn."""
 TOOL_OBSERVATION_REMINDER = (
     "Reminder: if the result only identifies a bridge entity, search that entity "
     "or relation before answering. Final output must be exactly one line: "
-    "Answer: <shortest single answer span>."
+    "Answer: <shortest single answer span>. If you have searched three times, "
+    "answer with the best supported span instead of searching again."
 )
 
 TOOL_CALL_PATTERN = re.compile(

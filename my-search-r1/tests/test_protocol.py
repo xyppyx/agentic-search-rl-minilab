@@ -24,6 +24,7 @@ class ProtocolPromptConstraintTest(unittest.TestCase):
         self.assertIn("Do not answer from memory", system_prompt)
         self.assertIn("bridge entity", system_prompt)
         self.assertIn("Do not stop after a search result", system_prompt)
+        self.assertIn("Use at most three searches", system_prompt)
         self.assertIn("output exactly one line", system_prompt)
         self.assertIn("shortest single answer span", system_prompt)
         self.assertIn("Do not include reasoning", system_prompt)
@@ -34,6 +35,7 @@ class ProtocolPromptConstraintTest(unittest.TestCase):
         self.assertEqual(message["role"], "tool")
         self.assertIn("Evidence about a bridge entity.", message["content"])
         self.assertIn(TOOL_OBSERVATION_REMINDER, message["content"])
+        self.assertIn("searched three times", message["content"])
 
     def test_training_tool_budget_counts_prompt_reminder(self) -> None:
         tokenizer = FakeTokenizer()

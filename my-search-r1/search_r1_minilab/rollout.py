@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import math
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -44,7 +45,18 @@ class RolloutConfig:
     temperature: float = 1.0
     top_p: float = 1.0
     seed: int = 42
+    advantage_normalization: str = "center"
+    advantage_epsilon: float = 1e-6
+    advantage_clip: float = 0.0
     reward_shaping: RewardShapingConfig = field(default_factory=RewardShapingConfig)
+
+    def __post_init__(self) -> None:
+        if self.advantage_normalization not in {"center", "standardize"}:
+            raise ValueError("advantage_normalization must be 'center' or 'standardize'")
+        if self.advantage_epsilon <= 0.0:
+            raise ValueError("advantage_epsilon must be positive")
+        if self.advantage_clip < 0.0:
+            raise ValueError("advantage_clip must be non-negative")
 
 
 @dataclass
@@ -312,16 +324,36 @@ def score_trajectory(
     trajectory.reward_components = components.to_dict()
 
 
-def assign_group_advantages(trajectories: list[Trajectory]) -> int:
+def assign_group_advantages(
+    trajectories: list[Trajectory],
+    *,
+    normalization: str = "center",
+    epsilon: float = 1e-6,
+    clip: float = 0.0,
+) -> int:
     """Assign centered reward advantages within each question group."""
+    if normalization not in {"center", "standardize"}:
+        raise ValueError("normalization must be 'center' or 'standardize'")
+    if epsilon <= 0.0:
+        raise ValueError("epsilon must be positive")
+    if clip < 0.0:
+        raise ValueError("clip must be non-negative")
     groups: dict[int, list[Trajectory]] = {}
     for trajectory in trajectories:
         groups.setdefault(trajectory.question_index, []).append(trajectory)
     degenerate = 0
     for group in groups.values():
         mean_reward = sum(item.reward for item in group) / len(group)
+        centered = [item.reward - mean_reward for item in group]
+        scale = 1.0
+        if normalization == "standardize":
+            variance = sum(value * value for value in centered) / len(centered)
+            scale = max(math.sqrt(variance), epsilon)
         for item in group:
-            item.advantage = item.reward - mean_reward
+            advantage = (item.reward - mean_reward) / scale
+            if clip > 0.0:
+                advantage = max(-clip, min(clip, advantage))
+            item.advantage = advantage
         if all(item.advantage == 0.0 for item in group):
             degenerate += 1
     return degenerate
@@ -423,7 +455,12 @@ def rollout_batch(
 
     for trajectory in trajectories:
         score_trajectory(trajectory, tokenizer, config.reward_shaping)
-    assign_group_advantages(trajectories)
+    assign_group_advantages(
+        trajectories,
+        normalization=config.advantage_normalization,
+        epsilon=config.advantage_epsilon,
+        clip=config.advantage_clip,
+    )
     return trajectories
 
 

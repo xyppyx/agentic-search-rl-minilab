@@ -41,7 +41,7 @@
 - `scripts/tool_smoke.py`：无需模型或真实 API key，使用 mock/local BM25 生成 trajectory JSONL 和报告。
 - `scripts/rollout_smoke_eval.py`：使用 PyTRIO 真实模型采样，默认通过 local BM25 生成 trajectory JSONL 和 Markdown 报告。
 - `scripts/eval_pytrio.py`：base/checkpoint 共用的训练级 rollout 评测入口，输出统一 JSONL 与 Markdown 报告。
-- `scripts/train_pytrio.py`：PyTRIO GRPO 训练入口，默认 local BM25 和公开 fixture，可跑 1-step smoke。
+- `scripts/train_pytrio.py`：PyTRIO GRPO 训练入口，默认 local BM25、公开 fixture 和 KL/std-stabilized GRPO，可跑 1-step smoke。
 - `scripts/analyse_trajectories.py`：从已有 trajectory JSONL 生成 Markdown 报告。
 - `scripts/analyse_checkpoints.py`：从 eval JSONL 生成 checkpoint EM/format 对比图，兼容 summary JSONL 和纯 trajectory JSONL。
 - `scripts/analyse_offline_diagnostics.py`：从 eval JSONL 离线标注 alias、答案粒度和 missing follow-up query 风险。
@@ -101,6 +101,13 @@ PYTHONPATH=my-search-r1 uv run python my-search-r1/scripts/train_pytrio.py \
   --swanlab-mode disabled \
   --run-name search-r1-minilab-smoke
 ```
+
+训练入口默认采用当前项目主策略：`advantage_normalization=standardize`、
+`advantage_clip=2.0`、`kl_coef=0.01`、`policy_ratio_clip=0.2` 和
+`learning_rate=1e-5`。该 KL 是 sampled-token logprob drift penalty，用于约束
+采样 token 上相对 reference 的漂移；reward 默认仍为 base reward，不启用额外
+behavior penalty。需要复现旧式 GRPO 时显式传入
+`--advantage-normalization center --advantage-clip 0 --kl-coef 0 --policy-ratio-clip 0 --learning-rate 4e-5`。
 
 训练和评测默认使用 `local_bm25`，可通过 `--backend mock_search` 或
 `--backend zhihu_search --env-file my-search-r1/.env` 切换。failure injection

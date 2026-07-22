@@ -26,6 +26,7 @@
 | `prompt_search_first` | 已完成 dev 70 | system prompt 明确要求最终回答前先看到至少一次 search result，不要凭记忆直接答 | 修复 prompt+v3 训练暴露出的 no-search 退化，并继续保护必要 follow-up | base Zhihu dev EM 0.3714、format 0.8000、平均搜索 2.0571、`missing_followup_query=0`、`multi_candidate_answer=0`、`answer_granularity_miss=0`、`bad_max_search_loop=3`，Zhihu success rate 1.0 | 当前最高 EM base，保留；下一步重点补 format/date completeness，而不是继续增强 follow-up |
 | `reward_v5_no_search_guard` | 已完成实现、离线 sensitivity、20-step；50-step 尝试中断 | `duplicate_query_penalty=0.02`、`empty_result_penalty=0.0`、`bad_max_search_penalty=0.005`、`date_granularity_penalty=0.05`、`multi_candidate_answer_penalty=0.02`、`no_search_penalty=0.03` | 防止 prompt+v3 训练学成“格式正确但过早不搜”，同时轻度约束 bad-loop | 离线检查在 prompt+v3 失败 checkpoint 上扣到 20 个 no-search wrong-valid，未扣正确；20-step final dev EM 0.3000、format 0.7286、平均搜索 2.5857、`missing_followup_query=0`、`answer_granularity_miss=5`；50-step 首次尝试在 step 41 因 prompt reconstruction failure 中断，已修复为单 trajectory stop reason | 不扩大到 50-step；no-search guard 防住了 no-search collapse，但诱发过度搜索和答案粒度退化。后续优先做 format/date completeness 约束 |
 | `prompt_search_budget_guard` | 已完成 dev-5/dev 70 | 在 `prompt_search_first` 基础上增加搜索预算提醒：尽量 3 次搜索内完成，3 次后用最佳证据输出短答案，不继续请求第 5 次搜索 | 保留 search-first 与必要 follow-up，同时修复 max-search 类 format 失败和平均搜索偏高 | Zhihu dev EM 0.4143、format 0.8857、平均搜索 1.9429、no-search 0、`missing_followup_query=0`、`multi_candidate_answer=0`、`answer_granularity_miss=0`、`bad_max_search_loop=4`，Zhihu success rate 1.0；相对 `prompt_search_first` gained 4/lost 1，invalid format 14 降到 8 | 当前最强 prompt base；暂不做 50-step 训练。后续优先做多 seed/搜索预算 ablation 或基于该 prompt 的 5-step smoke，门槛不低于 EM 0.4143、format 0.8857 |
+| `grpo_kl_std_5step` | 已完成实现和 5-step，已设为训练默认 | 在 `prompt_search_budget_guard` 上启用 `advantage_normalization=standardize`、`advantage_clip=2.0`、`kl_coef=0.01`、`policy_ratio_clip=0.2`、`learning_rate=1e-5`；KL 为 sampled-token logprob drift penalty | 抑制训练后策略漂移，同时稳定不同 group 的 advantage 尺度 | 5-step final dev EM 0.4286、format 0.9429、平均搜索 1.9429、no-search 0、`missing_followup_query=0`、`answer_granularity_miss=0`、`multi_candidate_answer=0`，相对 prompt-only best gained 2/lost 1、invalid format 8 降到 4；后续消融因 PyTRIO sampling 阻塞未完成，项目暂将 KL/std 作为合理必备技术手段 | 当前最强 checkpoint 证据；默认用于后续训练，PyTRIO 恢复后优先跑 20-step；不直接 50-step |
 
 ## Offline Diagnostics
 
@@ -303,6 +304,42 @@ helpful_followup_bonus=0.02
 - 该 prompt 没有牺牲 `missing_followup_query=0`，说明“3 次后作答”的约束没有明显压掉必要 follow-up。
 - 暂停继续扩大 v5/reward 训练；已有 prompt-only 结果优于当前训练 checkpoint。
 - 后续更适合做多 seed 稳定性、搜索预算文案 ablation，或只在该 prompt 上跑 5-step smoke，并以 EM 0.4143、format 0.8857 为新门槛。
+
+### Step 9: KL/std-stabilized GRPO
+
+验收状态：2026-07-22 已完成实现、本地 smoke、5-step Zhihu 训练和 dev 70 eval。
+
+配置：
+
+```text
+advantage_normalization=standardize
+advantage_clip=2.0
+kl_coef=0.01
+policy_ratio_clip=0.2
+learning_rate=1e-5
+max_steps=5
+group_size=4
+questions_per_batch=2
+```
+
+| 指标 | prompt search-budget guard | prompt budget + KL/std 5-step |
+| --- | ---: | ---: |
+| `em/macro` | 0.4143 | 0.4286 |
+| `format/rate` | 0.8857 | 0.9429 |
+| `rollout/search_calls` | 1.9429 | 1.9429 |
+| `rollout/no_search_rate` | 0.0000 | 0.0000 |
+| `missing_followup_query` | 0 | 0 |
+| `answer_granularity_miss` | 0 | 0 |
+| `multi_candidate_answer` | 0 | 0 |
+| `bad_max_search_loop` | 4 | 4 |
+
+决策：
+
+- 训练方向重新通过门控：在最强 prompt base 上加 std normalization、clip、KL-style reference 约束和更低学习率后，5-step 可以超过 prompt-only。
+- 当前收益主要体现在 format 改善和少量 EM 增益；平均搜索没有变高。
+- 不能直接归因到 KL 或 std 的单项效果；`std+clip only` 与 `KL only` ablation 因 PyTRIO sampling 阻塞未完成。
+- 用户已决策将 KL/std 组合作为项目当前合理必备技术手段；`train_pytrio.py` 默认值改为 `standardize + clip 2.0 + kl_coef 0.01 + ratio clip 0.2 + lr 1e-5`。
+- PyTRIO sampling 恢复后优先扩到 20-step，必须 `--save-every 5` 或更频繁，并以 EM 0.4286、format 0.9429、`missing_followup_query=0` 作为新门槛。
 
 ## 面试叙事
 

@@ -39,6 +39,11 @@ DEFAULT_BM25_CORPUS = ROOT / "tests" / "fixtures" / "bm25_corpus.jsonl"
 DEFAULT_ENV_FILE = ROOT / ".env"
 DEFAULT_OUTPUT_DIR = ROOT / "outputs" / "train_pytrio"
 DEFAULT_SWANLAB_PROJECT = "llm-agent-rl-lab-search-r1"
+DEFAULT_ADVANTAGE_NORMALIZATION = "standardize"
+DEFAULT_ADVANTAGE_CLIP = 2.0
+DEFAULT_KL_COEF = 0.01
+DEFAULT_POLICY_RATIO_CLIP = 0.2
+DEFAULT_LEARNING_RATE = 1e-5
 _SWANLAB_MODULE: Any | None = None
 
 
@@ -73,14 +78,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--advantage-normalization",
         choices=["center", "standardize"],
-        default="center",
+        default=DEFAULT_ADVANTAGE_NORMALIZATION,
+        help="Group advantage normalization; default uses KL/std-stabilized GRPO.",
     )
     parser.add_argument("--advantage-epsilon", type=float, default=1e-6)
-    parser.add_argument("--advantage-clip", type=float, default=0.0)
-    parser.add_argument("--kl-coef", type=float, default=0.0)
-    parser.add_argument("--policy-ratio-clip", type=float, default=0.0)
+    parser.add_argument("--advantage-clip", type=float, default=DEFAULT_ADVANTAGE_CLIP)
+    parser.add_argument("--kl-coef", type=float, default=DEFAULT_KL_COEF)
+    parser.add_argument("--policy-ratio-clip", type=float, default=DEFAULT_POLICY_RATIO_CLIP)
     parser.add_argument("--reference-model-path")
-    parser.add_argument("--learning-rate", type=float, default=4e-5)
+    parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
     parser.add_argument("--beta1", type=float, default=0.9)
     parser.add_argument("--beta2", type=float, default=0.95)
     parser.add_argument("--save-every", type=int, default=0)

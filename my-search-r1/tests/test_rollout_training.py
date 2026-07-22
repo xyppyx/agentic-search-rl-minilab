@@ -11,6 +11,7 @@ from search_r1_minilab.rollout import (
     AssistantTurn,
     RolloutConfig,
     Trajectory,
+    assign_group_advantages,
     rollout_batch,
     score_trajectory,
     trajectory_to_record,
@@ -19,12 +20,16 @@ from search_r1_minilab.rewards import RewardShapingConfig
 from search_r1_minilab.tooling import BackendConfig, build_registry
 from search_r1_minilab.tools import LocalBM25Backend, ToolRegistry
 from search_r1_minilab.training import (
+    add_reference_logprobs,
+    build_custom_forward_datums,
     build_datum,
     build_training_datums,
+    compute_reference_logprobs,
     datum_loss_token_count,
     evaluation_metrics,
     pack_micro_batches,
     weight_micro_batch_for_global_mean,
+    weight_micro_batch_items_for_global_mean,
 )
 from search_r1_minilab.trajectories import build_markdown_report
 
@@ -56,6 +61,26 @@ class TrainingRolloutTest(unittest.TestCase):
         self.assertEqual([item.reward for item in trajectories], [1.0, 0.0])
         self.assertEqual([item.advantage for item in trajectories], [0.5, -0.5])
         self.assertEqual(len(build_training_datums(trajectories)), 2)
+
+    def test_standardized_group_advantages_can_be_clipped(self) -> None:
+        trajectories = [
+            Trajectory(
+                example=SearchExample(f"q{index}", "Question?", ["A"], "test"),
+                group_index=index,
+                messages=[],
+                question_index=0,
+                reward=reward,
+            )
+            for index, reward in enumerate([1.0, 0.0])
+        ]
+
+        assign_group_advantages(
+            trajectories,
+            normalization="standardize",
+            clip=0.75,
+        )
+
+        self.assertEqual([item.advantage for item in trajectories], [0.75, -0.75])
 
     def test_tool_rollout_records_failure_for_shared_schema(self) -> None:
         registry = ToolRegistry()
@@ -169,6 +194,56 @@ class TrainingRolloutTest(unittest.TestCase):
         advantages = weighted[0].loss_fn_inputs["advantages"].to_numpy().tolist()
 
         self.assertEqual(advantages, [0.5, 0.5])
+
+    def test_weighted_micro_batch_items_preserve_reference_logprobs(self) -> None:
+        trajectory = Trajectory(
+            example=SearchExample("q-ref", "Question?", ["A"], "test"),
+            group_index=0,
+            messages=[],
+            advantage=1.0,
+            turns=[AssistantTurn([1], [2, 3], [0.1, 0.2], "ab")],
+        )
+        datum = build_datum(trajectory)
+        datum.reference_logprobs = [-0.4, -0.5]
+
+        weighted = weight_micro_batch_items_for_global_mean([datum], total_samples=2)
+
+        self.assertEqual(weighted[0].reference_logprobs, [-0.4, -0.5])
+        self.assertEqual(
+            weighted[0].datum.loss_fn_inputs["advantages"].to_numpy().tolist(),
+            [0.5, 0.5],
+        )
+
+    def test_reference_logprobs_align_to_shifted_targets(self) -> None:
+        trajectory = Trajectory(
+            example=SearchExample("q-kl", "Question?", ["A"], "test"),
+            group_index=0,
+            messages=[],
+            advantage=1.0,
+            turns=[AssistantTurn([10, 11], [12, 13], [0.1, 0.2], "ab")],
+        )
+        datum = build_datum(trajectory)
+        reference = FakeReferenceClient()
+
+        ref_logprobs = compute_reference_logprobs(datum, reference)
+
+        self.assertEqual(reference.requests, [[10, 11, 12, 13]])
+        self.assertEqual(ref_logprobs, [-0.11, -0.12, -0.13])
+
+    def test_add_reference_logprobs_and_custom_forward_datums(self) -> None:
+        trajectory = Trajectory(
+            example=SearchExample("q-custom", "Question?", ["A"], "test"),
+            group_index=0,
+            messages=[],
+            advantage=1.0,
+            turns=[AssistantTurn([1], [2], [0.1], "a")],
+        )
+        datums = add_reference_logprobs([build_datum(trajectory)], FakeReferenceClient())
+
+        custom = build_custom_forward_datums(datums)
+
+        self.assertEqual(datums[0].reference_logprobs, [-0.02])
+        self.assertEqual(set(custom[0].loss_fn_inputs.keys()), {"target_tokens"})
 
     def test_failure_wrapper_preserves_dispatch_backend_name(self) -> None:
         registry = build_registry(
@@ -499,6 +574,24 @@ class FakeSamplingClient:
         if len(texts) != num_samples:
             raise AssertionError("fake sample count does not match num_samples")
         return FakeResponse([FakeSequence(text) for text in texts])
+
+
+class FakeFuture:
+    def __init__(self, value: list[float | None]) -> None:
+        self._value = value
+
+    def result(self) -> list[float | None]:
+        return self._value
+
+
+class FakeReferenceClient:
+    def __init__(self) -> None:
+        self.requests: list[list[int]] = []
+
+    def compute_logprobs(self, prompt: object) -> FakeFuture:
+        tokens = [int(token) for token in prompt.tolist()]
+        self.requests.append(tokens)
+        return FakeFuture([None, *[-float(token) / 100.0 for token in tokens[1:]]])
 
 
 class FakeTokenizer:

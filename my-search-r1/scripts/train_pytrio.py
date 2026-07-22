@@ -18,13 +18,17 @@ from search_r1_minilab.rewards import RewardShapingConfig
 from search_r1_minilab.rollout import RolloutConfig, rollout_batch, trajectory_to_record
 from search_r1_minilab.tooling import BACKEND_CHOICES, BackendConfig, build_registry
 from search_r1_minilab.training import (
+    add_reference_logprobs,
+    build_custom_forward_datums,
     build_training_datums,
+    loss_input_float_lists,
+    make_grpo_kl_loss_fn,
     merge_trainer_metrics,
     pack_micro_batches,
     pick_mean_loss_metric,
     rollout_metrics,
     save_checkpoint,
-    weight_micro_batch_for_global_mean,
+    weight_micro_batch_items_for_global_mean,
 )
 from search_r1_minilab.trajectories import build_markdown_report, write_trajectory_jsonl
 
@@ -66,6 +70,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--verbose-answer-token-threshold", type=int, default=0)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-p", type=float, default=1.0)
+    parser.add_argument(
+        "--advantage-normalization",
+        choices=["center", "standardize"],
+        default="center",
+    )
+    parser.add_argument("--advantage-epsilon", type=float, default=1e-6)
+    parser.add_argument("--advantage-clip", type=float, default=0.0)
+    parser.add_argument("--kl-coef", type=float, default=0.0)
+    parser.add_argument("--policy-ratio-clip", type=float, default=0.0)
+    parser.add_argument("--reference-model-path")
     parser.add_argument("--learning-rate", type=float, default=4e-5)
     parser.add_argument("--beta1", type=float, default=0.9)
     parser.add_argument("--beta2", type=float, default=0.95)
@@ -119,6 +133,9 @@ def main(args: argparse.Namespace | None = None) -> None:
         temperature=args.temperature,
         top_p=args.top_p,
         seed=args.seed,
+        advantage_normalization=args.advantage_normalization,
+        advantage_epsilon=args.advantage_epsilon,
+        advantage_clip=args.advantage_clip,
         reward_shaping=_reward_shaping_config(args),
     )
     adam_params = trio.AdamParams(
@@ -126,6 +143,12 @@ def main(args: argparse.Namespace | None = None) -> None:
         beta1=args.beta1,
         beta2=args.beta2,
     )
+    reference_client = None
+    if args.kl_coef > 0.0:
+        reference_client = service_client.create_sampling_client(
+            base_model=args.base_model,
+            model_path=args.reference_model_path,
+        )
 
     run = _init_swanlab(args)
 
@@ -161,18 +184,43 @@ def main(args: argparse.Namespace | None = None) -> None:
 
                 train_bar.set_postfix(phase="build datums", refresh=True)
                 datums = build_training_datums(trajectories)
+                if reference_client is not None and datums:
+                    train_bar.set_postfix(phase="reference logprobs", refresh=True)
+                    datums = add_reference_logprobs(datums, reference_client)
                 micro_batches = pack_micro_batches(datums)
 
                 train_bar.set_postfix(phase="backward", refresh=True)
                 trainer_results = []
                 for micro_batch in micro_batches:
-                    result = training_client.forward_backward(
-                        weight_micro_batch_for_global_mean(
-                            micro_batch,
-                            total_samples=len(trajectories),
-                        ),
-                        loss_fn="importance_sampling",
-                    ).result()
+                    weighted_items = weight_micro_batch_items_for_global_mean(
+                        micro_batch,
+                        total_samples=len(trajectories),
+                    )
+                    if args.kl_coef > 0.0:
+                        result = training_client.forward_backward_custom(
+                            build_custom_forward_datums(weighted_items),
+                            make_grpo_kl_loss_fn(
+                                sampling_logprobs_list=loss_input_float_lists(
+                                    weighted_items,
+                                    "logprobs",
+                                ),
+                                advantages_list=loss_input_float_lists(
+                                    weighted_items,
+                                    "advantages",
+                                ),
+                                reference_logprobs_list=[
+                                    _require_reference_logprobs(item)
+                                    for item in weighted_items
+                                ],
+                                kl_coef=args.kl_coef,
+                                policy_ratio_clip=args.policy_ratio_clip,
+                            ),
+                        ).result()
+                    else:
+                        result = training_client.forward_backward(
+                            [item.datum for item in weighted_items],
+                            loss_fn="importance_sampling",
+                        ).result()
                     trainer_results.append(result)
 
                 if micro_batches:
@@ -299,6 +347,12 @@ def _reward_shaping_config(args: argparse.Namespace) -> RewardShapingConfig:
         verbose_answer_penalty=args.verbose_answer_penalty,
         verbose_answer_token_threshold=args.verbose_answer_token_threshold,
     )
+
+
+def _require_reference_logprobs(item: Any) -> list[float]:
+    if item.reference_logprobs is None:
+        raise ValueError("KL training requires reference logprobs on every datum")
+    return item.reference_logprobs
 
 
 def _write_step_artifacts(

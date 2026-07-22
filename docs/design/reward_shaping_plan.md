@@ -22,6 +22,7 @@
 | `penalty_v2_plus_max_search_0005` | 已完成 5-step | `duplicate_query_penalty=0.03`、`empty_result_penalty=0.01`、`max_search_no_answer_penalty=0.005`，关闭 verbose | 验证比 0.01 更温和的 max-search penalty 是否减少过早回答和答案粒度风险 | 5-step Zhihu dev EM 0.2714、format 0.8143、平均搜索 1.5714、`too_many_search_no_gain_rate=0.1714`；offline diagnostics 显示 `missing_followup_query=5`、`answer_granularity_miss=0` | 不作为优先扩大训练候选；0.01 版本的 format/效率更好，但仍需 gained/lost review |
 | `penalty_v3_followup_aware` | 已完成 5-step | `duplicate_query_penalty=0.03`、`empty_result_penalty=0.01`、`bad_max_search_penalty=0.01`、`date_granularity_penalty=0.05`、`multi_candidate_answer_penalty=0.02`；关闭传统 max-search 和 verbose | 只扣明显搜索空转，并约束日期粒度和多候选答案 | 5-step Zhihu dev EM 0.3000、format 0.8571、平均搜索 1.5143、`bad_max_search_loop=2`、`answer_granularity_miss=0`、`multi_candidate_answer=1`，但 `missing_followup_query=6` | final answer 粒度/唯一性方向有效；follow-up 风险未解决。下一步做正向 follow-up bonus 或 prompt/rollout 约束 |
 | `reward_v4_followup_bonus` | 已完成 5-step | 在 v3 基础上增加 `helpful_followup_bonus=0.02`；正确答案和 invalid format 不加 bonus | 从 penalty-only 转向正向行为信号，鼓励已经出现的有用 follow-up query | 离线预检查 `correct_boosted=0`；5-step dev EM 0.2714、format 0.7714、平均搜索 1.6286，`missing_followup_query=4`、`answer_granularity_miss=0`，Zhihu success rate 1.0 | 不扩大到 20/50-step；follow-up bonus 有局部收益但 format 退化，下一步优先做 prompt/rollout 约束或 `group_size=8` 稳定性对照 |
+| `penalty_v3_group_size8` | 已完成 5-step | 沿用 v3 reward，`group_size=8`、`questions_per_batch=2` | 验证更大 rollout group 是否降低 5-step 方差 | 5-step dev EM 0.2714、format 0.6857、平均搜索 2.1143，`helpful_followup_query_rate=0.4429`、`missing_followup_query=3`，Zhihu success rate 1.0 | 不扩大训练；helpful follow-up 增加但 format/search 明显退化，说明单纯增大 group 不能替代更强的 format/final-answer 约束 |
 
 ## Offline Diagnostics
 
@@ -258,6 +259,25 @@ helpful_followup_bonus=0.02
 - 5-step 结果为 EM 0.2714、format 0.7714、平均搜索 1.6286、`missing_followup_query=4`、`answer_granularity_miss=0`，Zhihu API 无错误。
 - 未达 `EM >= 0.3000` 和 `format >= 0.82` 门槛，因此不扩大到 20-step 或 50-step。
 - gained/lost 显示 v4 能修复 `dev_3412`、`test_97` 等需要 follow-up 或答案粒度的样本，但同时丢失 `dev_6748`、`test_494`、`test_4020` 等格式、证据读取和答案唯一性样本。
+
+### Step 7: Group-size 8 stability check
+
+验收状态：2026-07-22 已完成 v3 reward、`group_size=8` 的 5-step 训练和 dev 70 eval。
+
+| 指标 | v3 group 4 | v3 group 8 |
+| --- | ---: | ---: |
+| `em/macro` | 0.3000 | 0.2714 |
+| `format/rate` | 0.8571 | 0.6857 |
+| `rollout/search_calls` | 1.5143 | 2.1143 |
+| `behavior/helpful_followup_query_rate` | 0.2143 | 0.4429 |
+| `missing_followup_query` | 6 | 3 |
+| `behavior/too_many_search_no_gain_rate` | 0.1286 | 0.3143 |
+
+决策：
+
+- group size 8 提高了 helpful follow-up 行为率，并降低了 missing follow-up 诊断数。
+- 但 format、搜索效率和 EM 明显退化，不应继续扩大。
+- 这说明问题不只是 rollout 方差；下一步需要更强的 final-answer format/唯一性约束，或 prompt/rollout 层的中间实体锁定流程。
 
 ## 面试叙事
 

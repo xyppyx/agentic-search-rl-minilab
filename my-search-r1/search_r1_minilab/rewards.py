@@ -36,6 +36,7 @@ class RewardShapingConfig:
     date_granularity_penalty: float = 0.0
     multi_candidate_answer_penalty: float = 0.0
     helpful_followup_bonus: float = 0.0
+    no_search_penalty: float = 0.0
 
     def __post_init__(self) -> None:
         penalties = {
@@ -46,6 +47,7 @@ class RewardShapingConfig:
             "bad_max_search_penalty": self.bad_max_search_penalty,
             "date_granularity_penalty": self.date_granularity_penalty,
             "multi_candidate_answer_penalty": self.multi_candidate_answer_penalty,
+            "no_search_penalty": self.no_search_penalty,
         }
         for name, value in penalties.items():
             if value < 0.0:
@@ -69,6 +71,7 @@ class RewardComponents:
     date_granularity_penalty: float
     multi_candidate_answer_penalty: float
     helpful_followup_bonus: float
+    no_search_penalty: float
     final_reward: float
 
     def to_dict(self) -> dict[str, float]:
@@ -82,6 +85,7 @@ class RewardComponents:
             "date_granularity_penalty": self.date_granularity_penalty,
             "multi_candidate_answer_penalty": self.multi_candidate_answer_penalty,
             "helpful_followup_bonus": self.helpful_followup_bonus,
+            "no_search_penalty": self.no_search_penalty,
             "final_reward": self.final_reward,
         }
 
@@ -132,8 +136,11 @@ def apply_reward_shaping(
     date_granularity_penalty = 0.0
     multi_candidate_answer_penalty = 0.0
     helpful_followup_bonus = 0.0
+    no_search_penalty = 0.0
 
     if not base.exact_match:
+        if _no_search_failure(diagnostics):
+            no_search_penalty = config.no_search_penalty
         if diagnostics.duplicate_query_count > 0:
             duplicate_query_penalty = config.duplicate_query_penalty
         if diagnostics.empty_observation_count > 0:
@@ -170,6 +177,7 @@ def apply_reward_shaping(
         - bad_max_search_penalty
         - date_granularity_penalty
         - multi_candidate_answer_penalty
+        - no_search_penalty
         + helpful_followup_bonus
     )
     return RewardComponents(
@@ -182,6 +190,7 @@ def apply_reward_shaping(
         date_granularity_penalty=date_granularity_penalty,
         multi_candidate_answer_penalty=multi_candidate_answer_penalty,
         helpful_followup_bonus=helpful_followup_bonus,
+        no_search_penalty=no_search_penalty,
         final_reward=final_reward,
     )
 
@@ -214,4 +223,15 @@ def _multi_candidate_answer(answer: str, references: list[str]) -> bool:
     return not any(
         normalized_answer == normalize_answer(reference)
         for reference in references
+    )
+
+
+def _no_search_failure(diagnostics: TrajectoryDiagnostics) -> bool:
+    return (
+        not diagnostics.direct_correct
+        and not diagnostics.searched_correct
+        and not diagnostics.searched_wrong
+        and not diagnostics.searched_invalid_format
+        and diagnostics.tool_observation_count == 0
+        and diagnostics.pending_tool_call_count == 0
     )

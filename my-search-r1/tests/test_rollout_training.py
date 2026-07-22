@@ -109,6 +109,30 @@ class TrainingRolloutTest(unittest.TestCase):
         self.assertEqual(trajectories[0].stop_reason, "max_search_calls")
         self.assertEqual(registry.metrics()["tool/local_bm25/requests"], 0.0)
 
+    def test_prompt_reconstruction_failure_stops_single_trajectory(self) -> None:
+        registry = ToolRegistry()
+        registry.register(LocalBM25Backend.from_jsonl(FIXTURES_DIR / "bm25_corpus.jsonl"))
+
+        trajectories = rollout_batch(
+            FakeSamplingClient([[_tool_call("little prince")]]),
+            BrokenAssistantBoundaryTokenizer(),
+            registry,
+            "local_bm25",
+            [
+                SearchExample(
+                    id="q-boundary",
+                    question="Who wrote The Little Prince?",
+                    answers=["Antoine de Saint-Exupery"],
+                    data_source="test",
+                )
+            ],
+            RolloutConfig(group_size=1),
+        )
+
+        self.assertEqual(trajectories[0].search_calls, 1)
+        self.assertEqual(trajectories[0].stop_reason, "prompt_reconstruction_failed")
+        self.assertEqual(trajectory_to_record(trajectories[0], run_type="eval")["tool_failures"], 0)
+
     def test_build_datum_aligns_shifted_advantages(self) -> None:
         trajectory = Trajectory(
             example=SearchExample("q4", "Question?", ["A"], "test"),
@@ -291,6 +315,50 @@ class TrainingRolloutTest(unittest.TestCase):
         self.assertEqual(invalid.reward, -0.1)
         self.assertEqual(invalid.reward_components["helpful_followup_bonus"], 0.0)
 
+    def test_no_search_penalty_applies_to_wrong_unsearched_answers_only(self) -> None:
+        wrong = Trajectory(
+            example=SearchExample("q-nosrch-wrong", "Question?", ["A"], "test"),
+            group_index=0,
+            messages=[],
+            final_text="Answer: B",
+            stop_reason="answer",
+        )
+        correct = Trajectory(
+            example=SearchExample("q-nosrch-correct", "Question?", ["A"], "test"),
+            group_index=0,
+            messages=[],
+            final_text="Answer: A",
+            stop_reason="answer",
+        )
+        searched_wrong = Trajectory(
+            example=SearchExample("q-searched-wrong", "Question?", ["A"], "test"),
+            group_index=0,
+            messages=[],
+            search_calls=1,
+            final_text="Answer: B",
+            stop_reason="answer",
+            events=[
+                {
+                    "role": "assistant",
+                    "text": "",
+                    "tool_call": {"name": "search", "query": "Question"},
+                },
+                {"role": "tool", "tool_name": "search", "ok": True, "items": []},
+            ],
+        )
+        config = RewardShapingConfig(no_search_penalty=0.03)
+
+        score_trajectory(wrong, FakeTokenizer(), config)
+        score_trajectory(correct, FakeTokenizer(), config)
+        score_trajectory(searched_wrong, FakeTokenizer(), config)
+
+        self.assertEqual(wrong.reward_components["no_search_penalty"], 0.03)
+        self.assertAlmostEqual(wrong.reward, -0.03)
+        self.assertEqual(correct.reward_components["no_search_penalty"], 0.0)
+        self.assertEqual(correct.reward, 1.0)
+        self.assertEqual(searched_wrong.reward_components["no_search_penalty"], 0.0)
+        self.assertEqual(searched_wrong.reward, 0.0)
+
     def test_evaluation_metrics_include_behavior_rates(self) -> None:
         direct = Trajectory(
             example=SearchExample("q8", "Question?", ["A"], "test"),
@@ -466,6 +534,31 @@ class FakeTokenizer:
     def decode(self, tokens: list[int], skip_special_tokens: bool = True) -> str:
         del skip_special_tokens
         return "".join(chr(token) for token in tokens)
+
+
+class BrokenAssistantBoundaryTokenizer(FakeTokenizer):
+    def apply_chat_template(
+        self,
+        messages: list[dict],
+        *,
+        tools: list[dict],
+        tokenize: bool,
+        add_generation_prompt: bool,
+        enable_thinking: bool,
+    ) -> list[int]:
+        del tools, tokenize, enable_thinking
+        text = ""
+        for message in messages:
+            role = message["role"]
+            if role == "assistant":
+                text += "assistant:[rewritten]\n"
+            elif role == "tool":
+                text += "tool:" + message.get("content", "") + "\n"
+            else:
+                text += role + ":" + message.get("content", "") + "\n"
+        if add_generation_prompt:
+            text += "assistant:"
+        return self.encode(text, add_special_tokens=False)
 
 
 if __name__ == "__main__":

@@ -20,6 +20,8 @@ class ProtocolPromptConstraintTest(unittest.TestCase):
     def test_initial_prompt_includes_multihop_and_short_answer_constraints(self) -> None:
         system_prompt = initial_messages("Who wrote it?")[0]["content"]
 
+        self.assertIn("Search before giving the final answer", system_prompt)
+        self.assertIn("Do not answer from memory", system_prompt)
         self.assertIn("bridge entity", system_prompt)
         self.assertIn("Do not stop after a search result", system_prompt)
         self.assertIn("output exactly one line", system_prompt)

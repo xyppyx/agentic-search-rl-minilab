@@ -31,6 +31,7 @@ CONFIG_FIELDS = {
     "date_granularity": "date_granularity_penalty",
     "multi_candidate": "multi_candidate_answer_penalty",
     "helpful_followup": "helpful_followup_bonus",
+    "no_search": "no_search_penalty",
 }
 
 
@@ -60,6 +61,7 @@ class SensitivityConfig:
                 self.reward_shaping.multi_candidate_answer_penalty
             ),
             "helpful_followup_bonus": self.reward_shaping.helpful_followup_bonus,
+            "no_search_penalty": self.reward_shaping.no_search_penalty,
         }
 
 
@@ -84,6 +86,7 @@ class RescoreResult:
     date_granularity_penalty: float
     multi_candidate_answer_penalty: float
     helpful_followup_bonus: float
+    no_search_penalty: float
     possible_alias_match: bool
     answer_granularity_miss: bool
     missing_followup_query: bool
@@ -119,6 +122,7 @@ class RescoreResult:
             "date_granularity_penalty": self.date_granularity_penalty,
             "multi_candidate_answer_penalty": self.multi_candidate_answer_penalty,
             "helpful_followup_bonus": self.helpful_followup_bonus,
+            "no_search_penalty": self.no_search_penalty,
             "possible_alias_match": self.possible_alias_match,
             "answer_granularity_miss": self.answer_granularity_miss,
             "missing_followup_query": self.missing_followup_query,
@@ -147,6 +151,7 @@ class SensitivitySummary:
     bad_max_search_penalized_count: int
     date_granularity_penalized_count: int
     multi_candidate_penalized_count: int
+    no_search_penalized_count: int
     missing_followup_penalized_count: int
     helpful_followup_penalized_count: int
     bad_max_search_loop_penalized_count: int
@@ -180,6 +185,7 @@ class SensitivitySummary:
                 self.date_granularity_penalized_count
             ),
             "multi_candidate_penalized_count": self.multi_candidate_penalized_count,
+            "no_search_penalized_count": self.no_search_penalized_count,
             "missing_followup_penalized_count": (
                 self.missing_followup_penalized_count
             ),
@@ -251,6 +257,16 @@ def default_sensitivity_configs() -> tuple[SensitivityConfig, ...]:
                 helpful_followup_bonus=0.02,
             ),
         ),
+        SensitivityConfig(
+            "reward_v5_no_search_guard",
+            RewardShapingConfig(
+                duplicate_query_penalty=0.02,
+                bad_max_search_penalty=0.005,
+                date_granularity_penalty=0.05,
+                multi_candidate_answer_penalty=0.02,
+                no_search_penalty=0.03,
+            ),
+        ),
     )
 
 
@@ -270,6 +286,7 @@ def parse_sensitivity_config(value: str) -> SensitivityConfig:
         "date_granularity_penalty": 0.0,
         "multi_candidate_answer_penalty": 0.0,
         "helpful_followup_bonus": 0.0,
+        "no_search_penalty": 0.0,
     }
     for item in fields_text.split(","):
         key, item_separator, raw_value = item.partition("=")
@@ -353,6 +370,7 @@ def rescore_record(
         date_granularity_penalty=components.date_granularity_penalty,
         multi_candidate_answer_penalty=components.multi_candidate_answer_penalty,
         helpful_followup_bonus=components.helpful_followup_bonus,
+        no_search_penalty=components.no_search_penalty,
         possible_alias_match=offline.possible_alias_match,
         answer_granularity_miss=offline.answer_granularity_miss,
         missing_followup_query=offline.missing_followup_query,
@@ -430,8 +448,8 @@ def build_markdown_report(
         "",
         "## Configs",
         "",
-        "| Config | duplicate | empty | max_search | bad_max_search | date_granularity | multi_candidate | helpful_followup_bonus | verbose | verbose_threshold |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Config | duplicate | empty | max_search | bad_max_search | date_granularity | multi_candidate | helpful_followup_bonus | no_search | verbose | verbose_threshold |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for config in materialized_configs:
         shaping = config.reward_shaping
@@ -443,6 +461,7 @@ def build_markdown_report(
             f"{shaping.date_granularity_penalty:.4f} | "
             f"{shaping.multi_candidate_answer_penalty:.4f} | "
             f"{shaping.helpful_followup_bonus:.4f} | "
+            f"{shaping.no_search_penalty:.4f} | "
             f"{shaping.verbose_answer_penalty:.4f} | "
             f"{shaping.verbose_answer_token_threshold} |"
         )
@@ -452,8 +471,8 @@ def build_markdown_report(
             "",
             "## Summary",
             "",
-            "| Config | mean_base_reward | mean_final_reward | mean_delta | penalized | boosted | correct_penalized | correct_boosted | wrong_valid_penalized | wrong_valid_boosted | duplicate | empty | max_search | bad_max_search | date_penalty | multi_penalty | helpful_bonus | verbose | missing_followup_penalized | missing_followup_boosted | helpful_followup_penalized | helpful_followup_boosted | bad_max_loop | possible_alias | answer_granularity | multi_candidate_answer |",
-            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| Config | mean_base_reward | mean_final_reward | mean_delta | penalized | boosted | correct_penalized | correct_boosted | wrong_valid_penalized | wrong_valid_boosted | duplicate | empty | max_search | bad_max_search | date_penalty | multi_penalty | no_search | helpful_bonus | verbose | missing_followup_penalized | missing_followup_boosted | helpful_followup_penalized | helpful_followup_boosted | bad_max_loop | possible_alias | answer_granularity | multi_candidate_answer |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     for summary in summaries:
@@ -468,6 +487,7 @@ def build_markdown_report(
             f"{summary.bad_max_search_penalized_count} | "
             f"{summary.date_granularity_penalized_count} | "
             f"{summary.multi_candidate_penalized_count} | "
+            f"{summary.no_search_penalized_count} | "
             f"{summary.helpful_followup_bonus_count} | "
             f"{summary.verbose_penalized_count} | "
             f"{summary.missing_followup_penalized_count} | "
@@ -559,6 +579,9 @@ def _summarize_config(
         multi_candidate_penalized_count=sum(
             item.multi_candidate_answer_penalty > 0.0 for item in penalized
         ),
+        no_search_penalized_count=sum(
+            item.no_search_penalty > 0.0 for item in penalized
+        ),
         missing_followup_penalized_count=sum(
             item.missing_followup_query for item in penalized
         ),
@@ -602,6 +625,7 @@ def _format_case(index: int, result: RescoreResult) -> list[str]:
         "bad_max_search": result.bad_max_search_penalty,
         "date_granularity": result.date_granularity_penalty,
         "multi_candidate": result.multi_candidate_answer_penalty,
+        "no_search": result.no_search_penalty,
         "helpful_followup_bonus": -result.helpful_followup_bonus,
         "verbose": result.verbose_answer_penalty,
     }

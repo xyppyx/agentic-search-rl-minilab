@@ -230,6 +230,32 @@ class RewardSensitivityTest(unittest.TestCase):
         self.assertEqual(correct_result.final_reward, 1.0)
         self.assertFalse(correct_result.boosted)
 
+    def test_v5_penalizes_wrong_no_search_without_penalizing_direct_correct(self) -> None:
+        configs = {config.name: config for config in default_sensitivity_configs()}
+        wrong = make_record(
+            answer="B",
+            answers=["A"],
+            search_calls=0,
+        )
+        wrong["turns"] = wrong["turns"][-1:]
+        correct = make_record(
+            answer="A",
+            answers=["A"],
+            exact_match=True,
+            search_calls=0,
+        )
+        correct["turns"] = correct["turns"][-1:]
+
+        wrong_result = rescore_record(wrong, configs["reward_v5_no_search_guard"])
+        correct_result = rescore_record(correct, configs["reward_v5_no_search_guard"])
+
+        self.assertEqual(wrong_result.no_search_penalty, 0.03)
+        self.assertAlmostEqual(wrong_result.final_reward, -0.03)
+        self.assertTrue(wrong_result.penalized)
+        self.assertEqual(correct_result.no_search_penalty, 0.0)
+        self.assertEqual(correct_result.final_reward, 1.0)
+        self.assertFalse(correct_result.penalized)
+
     def test_max_search_penalty_applies_to_invalid_max_search_case(self) -> None:
         record = make_record(
             valid_format=False,
@@ -264,6 +290,9 @@ class RewardSensitivityTest(unittest.TestCase):
         v4 = parse_sensitivity_config("v4:helpful_followup=0.02")
         self.assertEqual(v4.reward_shaping.helpful_followup_bonus, 0.02)
 
+        v5 = parse_sensitivity_config("v5:no_search=0.03")
+        self.assertEqual(v5.reward_shaping.no_search_penalty, 0.03)
+
         with self.assertRaises(ValueError):
             parse_sensitivity_config("bad:unknown=1")
         with self.assertRaises(ValueError):
@@ -288,6 +317,8 @@ class RewardSensitivityTest(unittest.TestCase):
         self.assertEqual(v1_summary.penalized_count, 1)
         self.assertEqual(v1_summary.correct_penalized_count, 0)
         self.assertIn("reward_v4_followup_bonus", report)
+        self.assertIn("reward_v5_no_search_guard", report)
+        self.assertIn("no_search", report)
         self.assertIn("helpful_followup_bonus", report)
         self.assertIn("missing_followup", report)
         self.assertIn("# Sensitivity", report)

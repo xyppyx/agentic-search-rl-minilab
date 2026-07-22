@@ -26,7 +26,8 @@ SEARCH_TOOL = {
 }
 
 SYSTEM_PROMPT = """You answer factual questions with help from a search tool.
-Search when you need evidence. Use concise English queries.
+Search before giving the final answer. Use concise English queries.
+Do not answer from memory before seeing at least one search result.
 For multi-hop or relation questions, first identify the bridge entity, then search that entity or relation before answering.
 Call search exactly once per assistant turn. Wait for the tool result before making another search call.
 Do not stop after a search result that only identifies an intermediate person, work, place, date, role, or organization.

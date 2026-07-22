@@ -26,11 +26,20 @@ SEARCH_TOOL = {
 }
 
 SYSTEM_PROMPT = """You answer factual questions with help from a search tool.
-Search when you need evidence. You may call search several times with concise English queries.
+Search when you need evidence. Use concise English queries.
+For multi-hop or relation questions, first identify the bridge entity, then search that entity or relation before answering.
 Call search exactly once per assistant turn. Wait for the tool result before making another search call.
-When ready, end with exactly one non-empty line in this format:
-Answer: <your short answer>
+Do not stop after a search result that only identifies an intermediate person, work, place, date, role, or organization.
+When ready, output exactly one line and nothing else:
+Answer: <shortest single answer span>
+Do not include reasoning, markdown, citations, parentheses, alternatives, or words such as "or" after Answer:.
 Do not call a tool and give the final answer in the same turn."""
+
+TOOL_OBSERVATION_REMINDER = (
+    "Reminder: if the result only identifies a bridge entity, search that entity "
+    "or relation before answering. Final output must be exactly one line: "
+    "Answer: <shortest single answer span>."
+)
 
 TOOL_CALL_PATTERN = re.compile(
     r"<tool_call>\s*<function=search>\s*<parameter=query>\s*(.*?)\s*"
@@ -157,13 +166,18 @@ def parse_assistant(text: str) -> ParsedAssistant:
     return ParsedAssistant(kind="tool", content=content, query=query)
 
 
+def tool_message_content(content: str) -> str:
+    """Append rollout guidance to one tool observation."""
+    return f"{content}\n\n{TOOL_OBSERVATION_REMINDER}"
+
+
 def tool_message(call_id: str, content: str) -> dict[str, Any]:
     """Build a chat message containing a tool observation."""
     return {
         "role": "tool",
         "tool_call_id": call_id,
         "name": MODEL_TOOL_NAME,
-        "content": content,
+        "content": tool_message_content(content),
     }
 
 

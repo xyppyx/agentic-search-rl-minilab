@@ -115,6 +115,11 @@
 
 ## 2026-07-22
 
+- Prompt/rollout 层多跳 follow-up 与短答案格式约束已完成本地实现和回归验证。
+  - 相关路径：`my-search-r1/search_r1_minilab/protocol.py`、`my-search-r1/search_r1_minilab/rollout.py`、`my-search-r1/search_r1_minilab/rollout_smoke.py`、`my-search-r1/tests/test_protocol.py`
+  - 验证方式：运行 `PYTHONPATH=my-search-r1 uv run python -m unittest discover -s my-search-r1/tests -v`、`PYTHONPATH=my-search-r1 uv run python -m compileall -q my-search-r1/search_r1_minilab my-search-r1/scripts`、`git diff --check`。
+  - 关键结果：62 个 unittest 全部通过；系统 prompt 现在明确要求多跳/关系题先识别 bridge entity，再搜索该实体或关系后回答，并要求最终只输出一行 `Answer: <shortest single answer span>`；每次 tool observation 会追加 follow-up/最终答案格式提醒；训练 rollout 与 smoke rollout 的 `max_tool_response_tokens` 预算均已把该提醒计入，避免提示约束绕过 token budget。尚未运行知乎 dev 评测或新训练，因此不声称效果提升。
+
 - `reward_v4_followup_bonus` 5-step SwanLab 在线训练与 Zhihu dev 70 条评测已完成，未通过扩大训练门控。
   - 相关路径：`docs/interview/2026-07-22_reward_v4_followup_bonus_5step_eval.md`、`docs/design/reward_shaping_plan.md`、`my-search-r1/outputs/train_pytrio/reward-v4-followup-bonus-5step-20260721/`、`my-search-r1/eval_results/reward_train_compare_2026-07-21/reward_v4_followup_bonus_5step_dev.jsonl`、`my-search-r1/eval_results/reward_train_compare_2026-07-21/reward_v4_followup_bonus_5step_offline_diagnostics.md`、`my-search-r1/eval_results/reward_train_compare_2026-07-21/reward_v4_followup_bonus_5step_reward_sensitivity.md`
   - 验证方式：运行 dev-5 Zhihu smoke；运行 `train_pytrio.py` 的 5-step Zhihu GRPO v4 训练并开启 `--swanlab-mode online`；使用 final sampler weights 和 seed 42 运行 `eval_pytrio.py` 的 Zhihu dev 70 条评测；运行 `analyse_offline_diagnostics.py` 与 `analyse_reward_sensitivity.py`；人工对比 v4 与 v3、max001、v2_20 的 exact-match gained/lost。

@@ -19,6 +19,7 @@ from search_r1_minilab.protocol import (
     parse_assistant,
     stop_sequences,
     tool_message,
+    tool_message_content,
     token_count,
 )
 from search_r1_minilab.rewards import (
@@ -138,7 +139,8 @@ def fit_tool_content(
     accepted_prompt: list[int] | None = None
     for candidate in candidates:
         content = "\n\n".join([*accepted, candidate])
-        if token_count(tokenizer, content) > config.max_tool_response_tokens:
+        tool_content = tool_message_content(content)
+        if token_count(tokenizer, tool_content) > config.max_tool_response_tokens:
             break
         next_tool_message = tool_message(call_id, content)
         next_prompt = build_next_prompt(

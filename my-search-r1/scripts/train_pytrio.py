@@ -74,12 +74,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-search-penalty", type=float, default=0.0)
     parser.add_argument(
         "--turn-credit-policy",
-        choices=["none", "helpful_bridge", "evidence_bridge"],
+        choices=["none", "helpful_bridge", "evidence_bridge", "final_hop_bridge"],
         default="none",
     )
     parser.add_argument("--helpful-search-turn-bonus", type=float, default=0.0)
     parser.add_argument("--evidence-search-turn-bonus", type=float, default=0.0)
+    parser.add_argument("--final-hop-search-turn-bonus", type=float, default=0.0)
     parser.add_argument("--early-answer-turn-penalty", type=float, default=0.0)
+    parser.add_argument("--missing-final-hop-turn-penalty", type=float, default=0.0)
     parser.add_argument("--verbose-answer-penalty", type=float, default=0.0)
     parser.add_argument("--verbose-answer-token-threshold", type=int, default=0)
     parser.add_argument("--temperature", type=float, default=1.0)
@@ -157,7 +159,9 @@ def main(args: argparse.Namespace | None = None) -> None:
         policy=args.turn_credit_policy,
         helpful_search_turn_bonus=args.helpful_search_turn_bonus,
         evidence_search_turn_bonus=args.evidence_search_turn_bonus,
+        final_hop_search_turn_bonus=args.final_hop_search_turn_bonus,
         early_answer_turn_penalty=args.early_answer_turn_penalty,
+        missing_final_hop_turn_penalty=args.missing_final_hop_turn_penalty,
     )
     adam_params = trio.AdamParams(
         learning_rate=args.learning_rate,

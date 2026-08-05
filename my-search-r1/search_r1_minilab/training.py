@@ -14,7 +14,9 @@ from search_r1_minilab.rollout import Trajectory
 from search_r1_minilab.rewards import extract_answer
 from search_r1_minilab.turn_credit import (
     detect_early_answer_risk,
+    detect_missing_final_hop_risk,
     find_evidence_bridge_turns,
+    find_final_hop_attribute_turns,
     find_helpful_bridge_shape_turns,
 )
 
@@ -22,7 +24,12 @@ from search_r1_minilab.turn_credit import (
 MAX_TRAIN_CONTEXT_TOKENS = 8192
 MAX_MICRO_BATCH_ITEMS = 32
 MAX_MICRO_BATCH_PADDED_TOKENS = 64_000
-TURN_CREDIT_POLICIES = {"none", "helpful_bridge", "evidence_bridge"}
+TURN_CREDIT_POLICIES = {
+    "none",
+    "helpful_bridge",
+    "evidence_bridge",
+    "final_hop_bridge",
+}
 
 
 @dataclass(frozen=True)
@@ -32,19 +39,26 @@ class TurnCreditConfig:
     policy: str = "none"
     helpful_search_turn_bonus: float = 0.0
     evidence_search_turn_bonus: float = 0.0
+    final_hop_search_turn_bonus: float = 0.0
     early_answer_turn_penalty: float = 0.0
+    missing_final_hop_turn_penalty: float = 0.0
 
     def __post_init__(self) -> None:
         if self.policy not in TURN_CREDIT_POLICIES:
             raise ValueError(
-                "turn credit policy must be 'none', 'helpful_bridge', or 'evidence_bridge'"
+                "turn credit policy must be 'none', 'helpful_bridge', "
+                "'evidence_bridge', or 'final_hop_bridge'"
             )
         if self.helpful_search_turn_bonus < 0.0:
             raise ValueError("helpful search turn bonus must be non-negative")
         if self.evidence_search_turn_bonus < 0.0:
             raise ValueError("evidence search turn bonus must be non-negative")
+        if self.final_hop_search_turn_bonus < 0.0:
+            raise ValueError("final-hop search turn bonus must be non-negative")
         if self.early_answer_turn_penalty < 0.0:
             raise ValueError("early answer turn penalty must be non-negative")
+        if self.missing_final_hop_turn_penalty < 0.0:
+            raise ValueError("missing final-hop turn penalty must be non-negative")
 
 
 class TrainingDatum:
@@ -161,13 +175,16 @@ def apply_turn_credit(
             turn.credit_bonus = 0.0
             turn.credit_query = None
         _clear_event_turn_credit(trajectory)
-        if config.policy == "none" or config.helpful_search_turn_bonus == 0.0:
-            if config.policy != "evidence_bridge":
-                continue
+        if config.policy == "none":
+            continue
+        if config.policy == "helpful_bridge" and config.helpful_search_turn_bonus == 0.0:
+            continue
         if config.policy == "helpful_bridge":
             _apply_helpful_bridge_credit(trajectory, config.helpful_search_turn_bonus)
         elif config.policy == "evidence_bridge":
             _apply_evidence_bridge_credit(trajectory, config)
+        elif config.policy == "final_hop_bridge":
+            _apply_final_hop_bridge_credit(trajectory, config)
 
 
 def _apply_helpful_bridge_credit(trajectory: Trajectory, bonus: float) -> None:
@@ -237,6 +254,100 @@ def _apply_evidence_bridge_credit(
             min(trajectory.advantage, 0.0) - config.early_answer_turn_penalty
         ),
         bonus=-config.early_answer_turn_penalty,
+    )
+
+
+def _apply_final_hop_bridge_credit(
+    trajectory: Trajectory,
+    config: TurnCreditConfig,
+) -> None:
+    if not trajectory.valid_format or trajectory.exact_match:
+        return
+
+    if config.evidence_search_turn_bonus > 0.0:
+        for match in find_evidence_bridge_turns(
+            events=trajectory.events,
+            question=trajectory.example.question,
+            answers=trajectory.example.answers,
+        ):
+            _apply_turn_label(
+                trajectory,
+                match.turn_index,
+                label=match.label,
+                query=match.query,
+                effective_advantage=(
+                    max(trajectory.advantage, 0.0)
+                    + config.evidence_search_turn_bonus
+                ),
+                bonus=config.evidence_search_turn_bonus,
+            )
+
+    if config.final_hop_search_turn_bonus > 0.0:
+        for match in find_final_hop_attribute_turns(
+            events=trajectory.events,
+            question=trajectory.example.question,
+            answers=trajectory.example.answers,
+        ):
+            _apply_turn_label(
+                trajectory,
+                match.turn_index,
+                label=match.label,
+                query=match.query,
+                effective_advantage=(
+                    max(trajectory.advantage, 0.0)
+                    + config.final_hop_search_turn_bonus
+                ),
+                bonus=config.final_hop_search_turn_bonus,
+            )
+
+    final_turn_index = _final_answer_turn_index(trajectory.events)
+    if final_turn_index is None:
+        return
+
+    if config.early_answer_turn_penalty > 0.0:
+        risk = detect_early_answer_risk(
+            events=trajectory.events,
+            question=trajectory.example.question,
+            queries=_tool_queries(trajectory.events),
+            final_answer=extract_answer(trajectory.final_text) or "",
+            search_calls=trajectory.search_calls,
+            stop_reason=trajectory.stop_reason,
+        )
+        if risk.risky:
+            _apply_turn_label(
+                trajectory,
+                final_turn_index,
+                label="early_answer_missing_followup",
+                query=None,
+                effective_advantage=(
+                    min(trajectory.advantage, 0.0)
+                    - config.early_answer_turn_penalty
+                ),
+                bonus=-config.early_answer_turn_penalty,
+            )
+
+    if config.missing_final_hop_turn_penalty <= 0.0:
+        return
+    risk = detect_missing_final_hop_risk(
+        events=trajectory.events,
+        question=trajectory.example.question,
+        queries=_tool_queries(trajectory.events),
+        final_answer=extract_answer(trajectory.final_text) or "",
+        search_calls=trajectory.search_calls,
+        stop_reason=trajectory.stop_reason,
+    )
+    if not risk.risky:
+        return
+    _apply_turn_label(
+        trajectory,
+        final_turn_index,
+        label="missing_final_hop_attribute",
+        query=None,
+        effective_advantage=(
+            min(trajectory.advantage, 0.0)
+            - config.missing_final_hop_turn_penalty
+        ),
+        bonus=-config.missing_final_hop_turn_penalty,
     )
 
 
@@ -705,7 +816,9 @@ def _turn_credit_metrics(
 ) -> dict[str, float]:
     helpful_search_turns = 0
     evidence_search_turns = 0
+    final_hop_search_turns = 0
     early_answer_penalty_turns = 0
+    missing_final_hop_penalty_turns = 0
     credited_trajectories = 0
     credited_tokens = 0
     for trajectory in trajectories:
@@ -717,8 +830,12 @@ def _turn_credit_metrics(
                 helpful_search_turns += 1
             elif turn.credit_label == "evidence_bridge_search":
                 evidence_search_turns += 1
+            elif turn.credit_label == "final_hop_attribute_search":
+                final_hop_search_turns += 1
             elif turn.credit_label == "early_answer_missing_followup":
                 early_answer_penalty_turns += 1
+            elif turn.credit_label == "missing_final_hop_attribute":
+                missing_final_hop_penalty_turns += 1
             credited_tokens += len(turn.completion_tokens)
             trajectory_has_credit = True
         if trajectory_has_credit:
@@ -726,12 +843,16 @@ def _turn_credit_metrics(
     return {
         "turn_credit/policy": 1.0 if policy != "none" else 0.0,
         "turn_credit/helpful_search_turns": float(
-            helpful_search_turns + evidence_search_turns
+            helpful_search_turns + evidence_search_turns + final_hop_search_turns
         ),
         "turn_credit/helpful_bridge_search_turns": float(helpful_search_turns),
         "turn_credit/evidence_bridge_search_turns": float(evidence_search_turns),
+        "turn_credit/final_hop_attribute_search_turns": float(final_hop_search_turns),
         "turn_credit/early_answer_penalty_turns": float(
             early_answer_penalty_turns
+        ),
+        "turn_credit/missing_final_hop_penalty_turns": float(
+            missing_final_hop_penalty_turns
         ),
         "turn_credit/credited_trajectories": float(credited_trajectories),
         "turn_credit/credited_tokens": float(credited_tokens),

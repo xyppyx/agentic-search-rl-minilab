@@ -31,6 +31,67 @@ RELATION_TOKENS = FOLLOWUP_CUE_TOKENS | {
     "system",
     "university",
 }
+FINAL_HOP_ATTRIBUTE_CUES: dict[str, tuple[str, ...]] = {
+    "date": (
+        "birth",
+        "born",
+        "date",
+        "death",
+        "die",
+        "died",
+        "died earlier",
+        "older",
+        "younger",
+        "year",
+    ),
+    "nationality": (
+        "birthplace",
+        "born in",
+        "country",
+        "national",
+        "nationality",
+    ),
+    "founder": ("founded", "founder"),
+    "family": (
+        "father",
+        "grandfather",
+        "grandmother",
+        "husband",
+        "maternal",
+        "mother",
+        "parent",
+        "parents",
+        "paternal",
+        "spouse",
+        "wife",
+    ),
+    "creative_role": (
+        "author",
+        "composer",
+        "director",
+        "producer",
+        "writer",
+    ),
+}
+ATTRIBUTE_QUERY_TERMS: dict[str, set[str]] = {
+    "date": {"birth", "born", "date", "death", "died", "year"},
+    "nationality": {"birthplace", "born", "country", "national", "nationality"},
+    "founder": {"founded", "founder", "organization", "company"},
+    "family": {
+        "father",
+        "grandfather",
+        "grandmother",
+        "husband",
+        "maternal",
+        "mother",
+        "parent",
+        "parents",
+        "paternal",
+        "spouse",
+        "wife",
+    },
+    "creative_role": {"author", "composer", "director", "producer", "writer"},
+}
 EARLY_ANSWER_CUES = (
     "also known as",
     "director",
@@ -175,6 +236,68 @@ def find_evidence_bridge_turns(
     return matches
 
 
+def find_final_hop_attribute_turns(
+    *,
+    events: Iterable[dict[str, Any]],
+    question: str,
+    answers: Iterable[str],
+) -> list[SearchTurnMatch]:
+    """Return search turns that add required final-hop attribute evidence."""
+    materialized = list(events)
+    required_attributes = required_final_hop_attributes(question)
+    if not required_attributes:
+        return []
+
+    matches: list[SearchTurnMatch] = []
+    seen_queries: set[str] = set()
+    previous_tool_event: dict[str, Any] | None = None
+    for turn in _iter_search_turns(materialized):
+        normalized_query = normalize_query(turn.query)
+        terms = query_terms(turn.query)
+        query_number = len(seen_queries) + 1
+        is_duplicate = normalized_query in seen_queries
+        current_tool_event = turn.current_tool_event
+        if (
+            query_number >= 2
+            and not is_duplicate
+            and successful_nonempty_tool_event(previous_tool_event)
+            and successful_nonempty_tool_event(current_tool_event)
+        ):
+            matched_attributes = _matched_final_hop_attributes(
+                attributes=required_attributes,
+                query=turn.query,
+                event=current_tool_event,
+            )
+            if (
+                matched_attributes
+                and _query_hits_bridge_entity(
+                    query=turn.query,
+                    previous_event=previous_tool_event,
+                    question=question,
+                )
+                and _current_observation_has_evidence(
+                    query_term_set=terms,
+                    event=current_tool_event,
+                    answers=list(answers),
+                )
+            ):
+                matches.append(
+                    SearchTurnMatch(
+                        turn_index=turn.turn_index,
+                        query=turn.query,
+                        label="final_hop_attribute_search",
+                        reasons=tuple(
+                            f"final_hop_attribute:{attribute}"
+                            for attribute in sorted(matched_attributes)
+                        ),
+                    )
+                )
+        if normalized_query:
+            seen_queries.add(normalized_query)
+        previous_tool_event = current_tool_event
+    return matches
+
+
 def detect_early_answer_risk(
     *,
     events: Iterable[dict[str, Any]],
@@ -215,6 +338,60 @@ def detect_early_answer_risk(
             "nonempty_first_observation_has_multiple_candidates",
         ),
     )
+
+
+def detect_missing_final_hop_risk(
+    *,
+    events: Iterable[dict[str, Any]],
+    question: str,
+    queries: Iterable[str],
+    final_answer: str,
+    search_calls: int,
+    stop_reason: str,
+) -> EarlyAnswerRisk:
+    """Return whether an answer likely skipped a required final-hop attribute."""
+    if search_calls <= 0 or stop_reason != "answer":
+        return EarlyAnswerRisk(False)
+    required_attributes = required_final_hop_attributes(question)
+    if not required_attributes:
+        return EarlyAnswerRisk(False)
+
+    materialized = list(events)
+    if not any(
+        successful_nonempty_tool_event(event)
+        for event in materialized
+        if isinstance(event, dict) and event.get("role") == "tool"
+    ):
+        return EarlyAnswerRisk(False)
+
+    covered = _covered_final_hop_attributes(
+        attributes=required_attributes,
+        queries=queries,
+        events=materialized,
+    )
+    missing = required_attributes - covered
+    if not missing:
+        return EarlyAnswerRisk(False)
+    if _final_answer_is_supported_by_attribute_text(
+        final_answer=final_answer,
+        attributes=required_attributes,
+        events=materialized,
+    ):
+        return EarlyAnswerRisk(False)
+    return EarlyAnswerRisk(
+        True,
+        tuple(f"missing_final_hop_attribute:{attribute}" for attribute in sorted(missing)),
+    )
+
+
+def required_final_hop_attributes(question: str) -> set[str]:
+    """Return final-hop attribute types implied by a question."""
+    lowered = question.lower()
+    return {
+        attribute
+        for attribute, cues in FINAL_HOP_ATTRIBUTE_CUES.items()
+        if any(cue in lowered for cue in cues)
+    }
 
 
 def successful_nonempty_tool_event(event: dict[str, Any] | None) -> bool:
@@ -385,6 +562,81 @@ def query_terms_from_answer(answer: str) -> set[str]:
         for token in normalized.split()
         if len(token) > 1 and token not in QUERY_STOPWORDS
     }
+
+
+def _matched_final_hop_attributes(
+    *,
+    attributes: set[str],
+    query: str,
+    event: dict[str, Any] | None,
+) -> set[str]:
+    query_term_set = query_terms(query)
+    text_term_set = query_terms(tool_event_text(event))
+    matched: set[str] = set()
+    for attribute in attributes:
+        attribute_terms = ATTRIBUTE_QUERY_TERMS.get(attribute, set())
+        if query_term_set & attribute_terms:
+            matched.add(attribute)
+            continue
+        if text_term_set & attribute_terms:
+            matched.add(attribute)
+            continue
+        if attribute == "date" and NUMBER_PATTERN.search(tool_event_text(event)):
+            matched.add(attribute)
+    return matched
+
+
+def _covered_final_hop_attributes(
+    *,
+    attributes: set[str],
+    queries: Iterable[str],
+    events: list[dict[str, Any]],
+) -> set[str]:
+    query_text = " ".join(str(query) for query in queries)
+    observation_text = " ".join(
+        tool_event_text(event)
+        for event in events
+        if isinstance(event, dict) and event.get("role") == "tool"
+    )
+    covered: set[str] = set()
+    for attribute in attributes:
+        attribute_terms = ATTRIBUTE_QUERY_TERMS.get(attribute, set())
+        query_terms_set = query_terms(query_text)
+        observation_terms = query_terms(observation_text)
+        if query_terms_set & attribute_terms:
+            covered.add(attribute)
+            continue
+        if observation_terms & attribute_terms and attribute != "date":
+            covered.add(attribute)
+            continue
+        if attribute == "date" and (
+            query_terms_set & attribute_terms or NUMBER_PATTERN.search(observation_text)
+        ):
+            covered.add(attribute)
+    return covered
+
+
+def _final_answer_is_supported_by_attribute_text(
+    *,
+    final_answer: str,
+    attributes: set[str],
+    events: list[dict[str, Any]],
+) -> bool:
+    answer_terms = query_terms_from_answer(final_answer)
+    if not answer_terms:
+        return False
+    for event in events:
+        if not isinstance(event, dict) or event.get("role") != "tool":
+            continue
+        event_text = tool_event_text(event)
+        event_terms = query_terms(event_text)
+        if answer_terms <= event_terms and _matched_final_hop_attributes(
+            attributes=attributes,
+            query="",
+            event=event,
+        ):
+            return True
+    return False
 
 
 def _has_early_answer_cue(question: str) -> bool:

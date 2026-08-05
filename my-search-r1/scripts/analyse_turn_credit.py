@@ -15,7 +15,9 @@ from search_r1_minilab.offline_diagnostics import (
 )
 from search_r1_minilab.turn_credit import (
     detect_early_answer_risk,
+    detect_missing_final_hop_risk,
     find_evidence_bridge_turns,
+    find_final_hop_attribute_turns,
     find_helpful_bridge_shape_turns,
 )
 
@@ -66,7 +68,20 @@ def analyze_record(record: dict[str, Any]) -> dict[str, Any]:
         question=question,
         answers=answers,
     )
+    final_hop = find_final_hop_attribute_turns(
+        events=turns,
+        question=question,
+        answers=answers,
+    )
     early_risk = detect_early_answer_risk(
+        events=turns,
+        question=question,
+        queries=queries,
+        final_answer=final_answer,
+        search_calls=search_calls,
+        stop_reason=stop_reason,
+    )
+    final_hop_risk = detect_missing_final_hop_risk(
         events=turns,
         question=question,
         queries=queries,
@@ -93,8 +108,14 @@ def analyze_record(record: dict[str, Any]) -> dict[str, Any]:
         "training_credit_applied": bool(evidence) and wrong_valid,
         "evidence_training_credit_count": len(evidence) if wrong_valid else 0,
         "evidence_candidates": [_match_to_dict(match) for match in evidence],
+        "final_hop_candidate_detected": bool(final_hop),
+        "final_hop_candidate_count": len(final_hop),
+        "final_hop_training_credit_count": len(final_hop) if wrong_valid else 0,
+        "final_hop_candidates": [_match_to_dict(match) for match in final_hop],
         "early_answer_penalty_applied": early_risk.risky and wrong_valid,
         "early_answer_penalty_reasons": list(early_risk.reasons),
+        "missing_final_hop_penalty_applied": final_hop_risk.risky and wrong_valid,
+        "missing_final_hop_penalty_reasons": list(final_hop_risk.reasons),
         "key_case": record_id in KEY_CASE_IDS,
     }
 
@@ -134,14 +155,28 @@ def build_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         "evidence_training_credit_turns": sum(
             item["evidence_training_credit_count"] for item in items
         ),
+        "final_hop_candidate_turns": sum(
+            item["final_hop_candidate_count"] for item in items
+        ),
+        "final_hop_training_credit_turns": sum(
+            item["final_hop_training_credit_count"] for item in items
+        ),
         "evidence_candidate_records": sum(
             item["evidence_candidate_detected"] for item in items
         ),
+        "final_hop_candidate_records": sum(
+            item["final_hop_candidate_detected"] for item in items
+        ),
         "training_credit_records": sum(
-            item["training_credit_applied"] for item in items
+            item["training_credit_applied"]
+            or (item["final_hop_candidate_detected"] and item["valid_format"] and not item["exact_match"])
+            for item in items
         ),
         "early_answer_penalty_records": sum(
             item["early_answer_penalty_applied"] for item in items
+        ),
+        "missing_final_hop_penalty_records": sum(
+            item["missing_final_hop_penalty_applied"] for item in items
         ),
         "bucket_counts": dict(sorted(bucket_counts.items())),
     }
@@ -180,10 +215,21 @@ def build_markdown_report(
         lines.append(f"| `{bucket}` | {count} |")
     sections = [
         ("Evidence Candidates", lambda item: item["evidence_candidate_detected"]),
+        ("Final-Hop Attribute Candidates", lambda item: item["final_hop_candidate_detected"]),
         ("Training Evidence Credits", lambda item: item["training_credit_applied"]),
+        (
+            "Training Final-Hop Credits",
+            lambda item: item["final_hop_candidate_detected"]
+            and item["valid_format"]
+            and not item["exact_match"],
+        ),
         (
             "Early Answer Penalties",
             lambda item: item["early_answer_penalty_applied"],
+        ),
+        (
+            "Missing Final-Hop Penalties",
+            lambda item: item["missing_final_hop_penalty_applied"],
         ),
         ("Key Cases", lambda item: item["key_case"]),
     ]
@@ -229,6 +275,9 @@ def _format_case(index: int, item: dict[str, Any]) -> list[str]:
     evidence = "; ".join(
         f"`{candidate['query']}`" for candidate in item["evidence_candidates"]
     ) or "_none_"
+    final_hop = "; ".join(
+        f"`{candidate['query']}`" for candidate in item["final_hop_candidates"]
+    ) or "_none_"
     return [
         f"### Case {index}: {item['id'] or 'unknown'}",
         "",
@@ -239,8 +288,10 @@ def _format_case(index: int, item: dict[str, Any]) -> list[str]:
         f"- Exact/format/search: `{item['exact_match']}` / `{item['valid_format']}` / `{item['search_calls']}`",
         f"- Queries: {queries}",
         f"- Evidence candidates: {evidence}",
+        f"- Final-hop candidates: {final_hop}",
         f"- Training credit applied: `{item['training_credit_applied']}`",
         f"- Early answer penalty: `{item['early_answer_penalty_applied']}`",
+        f"- Missing final-hop penalty: `{item['missing_final_hop_penalty_applied']}`",
         "",
     ]
 

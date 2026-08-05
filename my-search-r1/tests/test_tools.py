@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import os
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from search_r1_minilab.tools import (
     FailureConfig,
@@ -14,7 +17,11 @@ from search_r1_minilab.tools import (
     ToolRegistry,
 )
 from search_r1_minilab.tools.smoke import build_tool_smoke_records
-from search_r1_minilab.tools.zhihu import ZhihuSearchBackend, parse_zhihu_keys
+from search_r1_minilab.tools.zhihu import (
+    ZhihuSearchBackend,
+    parse_zhihu_keys,
+    zhihu_keys_from_env,
+)
 
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
@@ -174,6 +181,93 @@ class ZhihuConfigTest(unittest.TestCase):
         keys = parse_zhihu_keys(" key-a, key-b\nkey-a ,, ")
 
         self.assertEqual(keys, ["key-a", "key-b"])
+
+    def test_zhihu_keys_from_env_includes_secondary_api_key(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"ZHIHU_API_KEY": "primary", "ZHIHU_API_KEY2": "secondary"},
+            clear=True,
+        ):
+            keys = zhihu_keys_from_env()
+
+        self.assertEqual(keys, ["primary", "secondary"])
+
+    def test_rate_limit_payload_rotates_to_secondary_key(self) -> None:
+        backend = ZhihuSearchBackend(["primary-key", "secondary-key"])
+        calls: list[str | None] = []
+
+        class FakeResponse:
+            def __init__(self, payload: dict, status: int = 200) -> None:
+                self.payload = payload
+                self.status = status
+
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps(self.payload).encode("utf-8")
+
+        def fake_urlopen(request, timeout: float = 0.0) -> FakeResponse:
+            calls.append(request.get_header("Authorization"))
+            if len(calls) == 1:
+                return FakeResponse(
+                    {
+                        "Code": 429,
+                        "Message": "quota exceeded",
+                        "Data": None,
+                    }
+                )
+            return FakeResponse(
+                {
+                    "Data": {
+                        "Items": [
+                            {
+                                "Title": "Result",
+                                "ContentText": "secondary key worked",
+                                "Url": "https://example.test",
+                                "ContentType": "Zhihu",
+                            }
+                        ]
+                    }
+                }
+            )
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            result = backend.search("test query")
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.items[0].title, "Result")
+        self.assertEqual(calls, ["Bearer primary-key", "Bearer secondary-key"])
+
+    def test_parse_error_records_sanitized_api_response(self) -> None:
+        backend = ZhihuSearchBackend("super-secret-key")
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps({"Code": 0, "Data": None}).encode("utf-8")
+
+        with patch("urllib.request.urlopen", return_value=FakeResponse()):
+            result = backend.search("schema mismatch")
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error_type, "parse_error")
+        self.assertEqual(result.error, "TypeError")
+        self.assertEqual(result.status, 200)
+        self.assertEqual(result.metadata["api_status"], 200)
+        self.assertIn('"Data": null', result.metadata["api_response_excerpt"])
+        self.assertFalse(result.metadata["api_response_truncated"])
+        self.assertNotIn("super-secret-key", result.to_dict().__repr__())
 
     def test_search_errors_do_not_leak_secret(self) -> None:
         backend = ZhihuSearchBackend("super-secret-key")

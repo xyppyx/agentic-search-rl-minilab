@@ -478,6 +478,13 @@ class TrainingRolloutTest(unittest.TestCase):
                 current_observation="Ronald Reagan died on June 5, 2004.",
                 include_final_answer_turn=True,
             ),
+            _final_hop_candidate(
+                advantage=-0.5,
+                second_query="Ronald Reagan biography",
+                current_observation="Ronald Reagan died on June 5, 2004.",
+                final_text="Answer: June 2004",
+                include_final_answer_turn=True,
+            ),
         ]
 
         build_training_datums(candidates, config)
@@ -487,6 +494,92 @@ class TrainingRolloutTest(unittest.TestCase):
                 "missing_final_hop_attribute",
                 [turn.credit_label for turn in trajectory.turns],
             )
+
+    def test_missing_final_hop_penalty_requires_explicit_attribute_query(self) -> None:
+        trajectory = _final_hop_candidate(
+            advantage=-0.5,
+            question="When did the president who succeeded Jimmy Carter die?",
+            second_query="Ronald Reagan biography",
+            current_observation="Ronald Reagan was president from 1981 to 1989.",
+            include_final_answer_turn=True,
+        )
+
+        build_training_datums(
+            [trajectory],
+            TurnCreditConfig(
+                policy="final_hop_bridge",
+                missing_final_hop_turn_penalty=0.08,
+            ),
+        )
+
+        self.assertEqual(
+            trajectory.turns[-1].credit_label,
+            "missing_final_hop_attribute",
+        )
+
+    def test_final_answer_guard_penalizes_max_search_and_invalid_format(self) -> None:
+        max_search = _final_hop_candidate(
+            advantage=-0.5,
+            valid_format=False,
+            final_text=_tool_call("Ronald Reagan death date"),
+            stop_reason="max_search_calls",
+        )
+        invalid_answer = _final_hop_candidate(
+            advantage=-0.5,
+            valid_format=False,
+            include_final_answer_turn=True,
+            final_text="June 2004",
+            stop_reason="invalid_format",
+        )
+
+        datums = build_training_datums(
+            [max_search, invalid_answer],
+            TurnCreditConfig(
+                policy="final_hop_bridge",
+                final_answer_guard_turn_penalty=0.06,
+            ),
+        )
+
+        self.assertAlmostEqual(
+            datums[0].datum.loss_fn_inputs["advantages"].to_numpy().tolist()[-1],
+            -0.56,
+        )
+        self.assertEqual(max_search.turns[-1].credit_label, "final_answer_guard")
+        self.assertEqual(invalid_answer.turns[-1].credit_label, "final_answer_guard")
+
+    def test_final_answer_guard_rejects_correct_and_unsearched_invalid(self) -> None:
+        correct = _final_hop_candidate(
+            advantage=0.5,
+            exact_match=True,
+            valid_format=True,
+            include_final_answer_turn=True,
+            final_text="Answer: June 5, 2004",
+        )
+        unsearched_invalid = Trajectory(
+            example=SearchExample("q-invalid", "Question?", ["A"], "test"),
+            group_index=0,
+            messages=[],
+            search_calls=0,
+            final_text="A",
+            reward=-0.1,
+            advantage=-0.5,
+            valid_format=False,
+            exact_match=False,
+            stop_reason="invalid_format",
+            events=[{"role": "assistant", "text": "A", "parsed_kind": "invalid"}],
+            turns=[AssistantTurn([1], [2], [0.1], "A")],
+        )
+
+        build_training_datums(
+            [correct, unsearched_invalid],
+            TurnCreditConfig(
+                policy="final_hop_bridge",
+                final_answer_guard_turn_penalty=0.06,
+            ),
+        )
+
+        self.assertFalse(any(turn.credit_label for turn in correct.turns))
+        self.assertFalse(any(turn.credit_label for turn in unsearched_invalid.turns))
 
     def test_weight_micro_batch_scales_advantages(self) -> None:
         trajectories = [
@@ -896,6 +989,7 @@ def _final_hop_candidate(
     exact_match: bool = False,
     include_final_answer_turn: bool = False,
     final_text: str = "Answer: March 2004",
+    stop_reason: str = "answer",
 ) -> Trajectory:
     answers = answers or ["June 5, 2004"]
     first_items = (
@@ -951,7 +1045,7 @@ def _final_hop_candidate(
         advantage=advantage,
         valid_format=valid_format,
         exact_match=exact_match,
-        stop_reason="answer",
+        stop_reason=stop_reason,
         events=events,
         turns=turns,
     )

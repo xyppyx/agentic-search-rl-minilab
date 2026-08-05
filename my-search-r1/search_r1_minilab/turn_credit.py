@@ -35,8 +35,10 @@ FINAL_HOP_ATTRIBUTE_CUES: dict[str, tuple[str, ...]] = {
     "date": (
         "birth",
         "born",
+        "birthdate",
         "date",
         "death",
+        "deathdate",
         "die",
         "died",
         "died earlier",
@@ -74,7 +76,16 @@ FINAL_HOP_ATTRIBUTE_CUES: dict[str, tuple[str, ...]] = {
     ),
 }
 ATTRIBUTE_QUERY_TERMS: dict[str, set[str]] = {
-    "date": {"birth", "born", "date", "death", "died", "year"},
+    "date": {
+        "birth",
+        "birthdate",
+        "born",
+        "date",
+        "death",
+        "deathdate",
+        "died",
+        "year",
+    },
     "nationality": {"birthplace", "born", "country", "national", "nationality"},
     "founder": {"founded", "founder", "organization", "company"},
     "family": {
@@ -366,8 +377,8 @@ def detect_missing_final_hop_risk(
 
     covered = _covered_final_hop_attributes(
         attributes=required_attributes,
+        question=question,
         queries=queries,
-        events=materialized,
     )
     missing = required_attributes - covered
     if not missing:
@@ -382,6 +393,23 @@ def detect_missing_final_hop_risk(
         True,
         tuple(f"missing_final_hop_attribute:{attribute}" for attribute in sorted(missing)),
     )
+
+
+def detect_final_answer_guard_risk(
+    *,
+    search_calls: int,
+    stop_reason: str,
+    valid_format: bool,
+    exact_match: bool,
+) -> EarlyAnswerRisk:
+    """Return whether the last assistant turn should be penalized for not answering cleanly."""
+    if exact_match or search_calls <= 0:
+        return EarlyAnswerRisk(False)
+    if stop_reason == "max_search_calls" and not valid_format:
+        return EarlyAnswerRisk(True, ("max_search_no_answer_after_search",))
+    if stop_reason in {"answer", "invalid_format"} and not valid_format:
+        return EarlyAnswerRisk(True, ("invalid_final_answer_format_after_search",))
+    return EarlyAnswerRisk(False)
 
 
 def required_final_hop_attributes(question: str) -> set[str]:
@@ -589,31 +617,42 @@ def _matched_final_hop_attributes(
 def _covered_final_hop_attributes(
     *,
     attributes: set[str],
+    question: str,
     queries: Iterable[str],
-    events: list[dict[str, Any]],
 ) -> set[str]:
     query_text = " ".join(str(query) for query in queries)
-    observation_text = " ".join(
-        tool_event_text(event)
-        for event in events
-        if isinstance(event, dict) and event.get("role") == "tool"
-    )
+    question_attribute_terms = _question_attribute_terms(attributes, question)
     covered: set[str] = set()
     for attribute in attributes:
-        attribute_terms = ATTRIBUTE_QUERY_TERMS.get(attribute, set())
+        attribute_terms = (
+            question_attribute_terms.get(attribute)
+            or ATTRIBUTE_QUERY_TERMS.get(attribute, set())
+        )
         query_terms_set = query_terms(query_text)
-        observation_terms = query_terms(observation_text)
         if query_terms_set & attribute_terms:
             covered.add(attribute)
-            continue
-        if observation_terms & attribute_terms and attribute != "date":
-            covered.add(attribute)
-            continue
-        if attribute == "date" and (
-            query_terms_set & attribute_terms or NUMBER_PATTERN.search(observation_text)
-        ):
-            covered.add(attribute)
     return covered
+
+
+def _question_attribute_terms(
+    attributes: set[str],
+    question: str,
+) -> dict[str, set[str]]:
+    """Return query terms that count as explicit coverage for each required attribute."""
+    lowered = question.lower()
+    terms_by_attribute: dict[str, set[str]] = {}
+    for attribute in attributes:
+        terms_by_attribute[attribute] = set(
+            ATTRIBUTE_QUERY_TERMS.get(attribute, set())
+        )
+    if "date" in attributes:
+        date_terms = {"date", "year"}
+        if any(cue in lowered for cue in ("birth", "born", "older", "younger")):
+            date_terms.update({"birth", "birthdate", "born"})
+        if any(cue in lowered for cue in ("death", "die", "died", "died earlier")):
+            date_terms.update({"death", "deathdate", "die", "died"})
+        terms_by_attribute["date"] = date_terms
+    return terms_by_attribute
 
 
 def _final_answer_is_supported_by_attribute_text(

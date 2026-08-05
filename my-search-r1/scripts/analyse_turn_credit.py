@@ -15,6 +15,7 @@ from search_r1_minilab.offline_diagnostics import (
 )
 from search_r1_minilab.turn_credit import (
     detect_early_answer_risk,
+    detect_final_answer_guard_risk,
     detect_missing_final_hop_risk,
     find_evidence_bridge_turns,
     find_final_hop_attribute_turns,
@@ -89,6 +90,12 @@ def analyze_record(record: dict[str, Any]) -> dict[str, Any]:
         search_calls=search_calls,
         stop_reason=stop_reason,
     )
+    final_answer_guard_risk = detect_final_answer_guard_risk(
+        search_calls=search_calls,
+        stop_reason=stop_reason,
+        valid_format=valid_format,
+        exact_match=exact_match,
+    )
     return {
         "id": record_id,
         "data_source": record.get("data_source"),
@@ -116,6 +123,10 @@ def analyze_record(record: dict[str, Any]) -> dict[str, Any]:
         "early_answer_penalty_reasons": list(early_risk.reasons),
         "missing_final_hop_penalty_applied": final_hop_risk.risky and wrong_valid,
         "missing_final_hop_penalty_reasons": list(final_hop_risk.reasons),
+        "final_answer_guard_penalty_applied": (
+            final_answer_guard_risk.risky and not exact_match
+        ),
+        "final_answer_guard_penalty_reasons": list(final_answer_guard_risk.reasons),
         "key_case": record_id in KEY_CASE_IDS,
     }
 
@@ -178,6 +189,9 @@ def build_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         "missing_final_hop_penalty_records": sum(
             item["missing_final_hop_penalty_applied"] for item in items
         ),
+        "final_answer_guard_penalty_records": sum(
+            item["final_answer_guard_penalty_applied"] for item in items
+        ),
         "bucket_counts": dict(sorted(bucket_counts.items())),
     }
 
@@ -230,6 +244,10 @@ def build_markdown_report(
         (
             "Missing Final-Hop Penalties",
             lambda item: item["missing_final_hop_penalty_applied"],
+        ),
+        (
+            "Final Answer Guard Penalties",
+            lambda item: item["final_answer_guard_penalty_applied"],
         ),
         ("Key Cases", lambda item: item["key_case"]),
     ]
@@ -292,6 +310,7 @@ def _format_case(index: int, item: dict[str, Any]) -> list[str]:
         f"- Training credit applied: `{item['training_credit_applied']}`",
         f"- Early answer penalty: `{item['early_answer_penalty_applied']}`",
         f"- Missing final-hop penalty: `{item['missing_final_hop_penalty_applied']}`",
+        f"- Final answer guard penalty: `{item['final_answer_guard_penalty_applied']}`",
         "",
     ]
 

@@ -82,6 +82,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--final-hop-search-turn-bonus", type=float, default=0.0)
     parser.add_argument("--early-answer-turn-penalty", type=float, default=0.0)
     parser.add_argument("--missing-final-hop-turn-penalty", type=float, default=0.0)
+    parser.add_argument("--final-answer-guard-turn-penalty", type=float, default=0.0)
     parser.add_argument("--verbose-answer-penalty", type=float, default=0.0)
     parser.add_argument("--verbose-answer-token-threshold", type=int, default=0)
     parser.add_argument("--temperature", type=float, default=1.0)
@@ -162,6 +163,7 @@ def main(args: argparse.Namespace | None = None) -> None:
         final_hop_search_turn_bonus=args.final_hop_search_turn_bonus,
         early_answer_turn_penalty=args.early_answer_turn_penalty,
         missing_final_hop_turn_penalty=args.missing_final_hop_turn_penalty,
+        final_answer_guard_turn_penalty=args.final_answer_guard_turn_penalty,
     )
     adam_params = trio.AdamParams(
         learning_rate=args.learning_rate,

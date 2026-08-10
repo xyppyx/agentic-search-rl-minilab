@@ -123,4 +123,4 @@ Gained/lost：
 
 `evidence_bridge` v2 通过了离线门槛，并在 5-step 训练中实际产生了正向 evidence credit 和 early-answer penalty。最终 dev 70 EM 追平当前最高 0.4286，平均搜索优于 `prompt_budget_kl_std_5step` 和 `turn_credit_helpful_bridge_5step`，且没有重新引入 missing follow-up。
 
-但本轮 format 为 0.9429，低于预设 0.95 门槛，因此原始判断是不应直接跑 20-step 或 50-step。随后按用户要求已完成 20-step 扩展，结果见 `docs/interview/2026-07-22_turn_level_evidence_credit_v2_20step_eval.md`：20-step v2 dev 70 EM 0.4429、format 1.0000、平均搜索 1.7714、`missing_followup_query=0`，相对 5-step v2 gained 1/lost 0，相对 `helpful_bridge` 20-step 拿回 5 个关键二跳/role-binding lost case。最新决策更新为：20-step v2 可作为当前最强 checkpoint 证据，但仍不直接扩到 50-step，下一步优先做多 seed 稳定性或补 bad-loop/final-answer 约束。
+但本轮 format 为 0.9429，低于预设 0.95 门槛，因此原始判断是不应直接跑 20-step 或 50-step。随后按用户要求已完成 20-step 扩展，结果见 `docs/interview/lesson/2026-07-22_turn_level_evidence_credit_v2_20step_eval.md`：20-step v2 dev 70 EM 0.4429、format 1.0000、平均搜索 1.7714、`missing_followup_query=0`，相对 5-step v2 gained 1/lost 0，相对 `helpful_bridge` 20-step 拿回 5 个关键二跳/role-binding lost case。最新决策更新为：20-step v2 可作为当前最强 checkpoint 证据，但仍不直接扩到 50-step，下一步优先做多 seed 稳定性或补 bad-loop/final-answer 约束。

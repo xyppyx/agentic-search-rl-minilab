@@ -7,13 +7,13 @@ Robust Search-R1 MiniLab:
 低成本、多工具、不可靠环境下的搜索型 Agent RL 实验框架
 ```
 
-设计草案见 [docs/design/idea.md](docs/design/idea.md)，reward 设计版本与下一轮实验计划见 [docs/design/reward_shaping_plan.md](docs/design/reward_shaping_plan.md)。后续正式改进实现默认放在 [my-search-r1/](my-search-r1/)；上游 Search-R1 教学复现保留在 [03-search-r1/](03-search-r1/) 作为基线参考。
+设计草案见 [docs/design/idea.md](docs/design/idea.md)，reward 设计版本与下一轮实验计划见 [docs/design/reward_shaping_plan.md](docs/design/reward_shaping_plan.md)。正式改进实现放在 [my-search-r1/](my-search-r1/)；原教学复现目录已归档到 `Backup` 分支，`main` 只保留当前项目主线。
 
 ## 项目边界
 
-- `00-loss-function/`、`01-grpo/`、`02-opd/`、`03-search-r1/`：原教学复现内容，用于理解算法和对照基线。
 - `my-search-r1/`：本项目改进实现区，优先承载工具封装、trajectory 记录、鲁棒工具环境、reward 组件化和后续训练后端封装。
 - `docs/`：设计、状态事实源、学习记录和实验复盘。
+- `Backup` 分支：归档 `00-loss-function/`、`01-grpo/`、`02-opd/`、`03-search-r1/` 四个原教学目录，用于历史参考。
 
 本项目是个人学习型 POC，不代表 PyTRIO、SwanLab、知乎开放平台、Search-R1 官方实现或原作者参与、委托或认可。
 
@@ -41,14 +41,7 @@ Robust Search-R1 MiniLab:
 uv sync
 ```
 
-运行现有上游 Search-R1 基线前，需要进入 `03-search-r1/` 并按该目录说明配置 `.env`。真实 API key、远程训练凭据、SwanLab 私有链接、模型权重和 checkpoint 不得提交。
-
-```bash
-cd 03-search-r1
-uv run python prepare_data.py
-```
-
-`my-search-r1/` 目前用于承接改进实现；新增脚本应优先提供 smoke run 参数和可复现的输出路径。
+`my-search-r1/` 是当前主分支的正式实现区。新增脚本应优先提供 smoke run 参数和可复现的输出路径。需要查看或恢复原教学目录时，切换到 `Backup` 分支。
 
 ## 协作规范
 

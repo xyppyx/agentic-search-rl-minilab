@@ -31,3 +31,7 @@
 - 按用户要求强制只用第二个 Zhihu key 尝试 guard-fix bridge rerun，先跑 bridge-5 health。该 health run 生成 5 条 trajectory，但 14 次 Zhihu 请求全部 rate-limited，success rate 0.0、rate-limit rate 1.0；因此没有继续跑完整 bridge150。长期决策：当前两个 key 都不能支撑正式 targeted bridge rerun，需等待 quota 恢复或提供新的可用 key。复盘记录继续写入 `docs/interview/lesson/2026-08-05_final_hop_guardfix_5step_train_eval.md`。
 - 按用户要求再用原 Zhihu key 重跑 guard-fix bridge150。bridge-5 health 通过，完整 bridge150 运行完成，但 `dev_7742` 出现 1 个 `parse_error`，Zhihu success rate 0.9979，仍未通过 success rate 1.0 的正式工具门槛；参考值 EM macro 0.4817、correct 79/150、format 0.7867 不能作为正式比较结论。长期决策：当前 guard-fix checkpoint 仍无正式 bridge150 结果，不能用参考 EM 包装简历指标。
 - 按用户要求验证“忽略唯一工具错误并单独补跑错误 case”的可行性。`eval_pytrio.py` 暂无 `--example-id` 参数，但可从 `bridge_eval_150.jsonl` 抽取第 20 行 `dev_7742` 生成单样本 JSONL，并使用同一 final sampler weights 补跑。单样本补跑 Zhihu requests 4、success rate 1.0、exact match 1、format 1.0；替换原失败记录后的 patched bridge150 为 EM macro 0.4842、correct 80/150、format 0.7933、tool failures 0。长期决策：patched 结果可用于分析外部工具噪声影响，说明 guard-fix bridge EM/correct 小幅超过 prompt-only base，但必须显式标注 patched 协议；主要短板仍是 format/max-search no-answer，不应继续把精力放在全量重跑上。
+
+## 2026-08-10
+
+- 按用户要求创建 `Backup` 分支，用于保留 `00-loss-function/`、`01-grpo/`、`02-opd/`、`03-search-r1/` 四个原教学复现目录；随后在 `main` 删除这些目录和本地残留，并更新入口文档。长期决策：`main` 聚焦 Robust Search-R1 MiniLab 自有实现和面试/实验文档，原教学内容只作为备份分支历史参考，不再作为主分支结构的一部分。

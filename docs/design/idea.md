@@ -1,6 +1,6 @@
 # Search-R1 MiniLab Ideas
 
-本文记录把 `03-search-r1` 从教学复现扩展成个人项目的设计想法。
+本文记录把上游 Search-R1 教学复现扩展成个人项目的设计想法。原 `03-search-r1/` 教学目录已归档到 `Backup` 分支，`main` 的正式实现位于 `my-search-r1/`。
 
 项目主题可以暂定为：
 
@@ -36,7 +36,7 @@ P4: 阶段化训练
 建议结构：
 
 ```text
-03-search-r1/
+my-search-r1/
   tools/
     base.py
     registry.py
@@ -264,7 +264,7 @@ rollout/answer_after_tool_failure_rate
 建议结构：
 
 ```text
-03-search-r1/
+my-search-r1/
   backend/
     base.py
     pytrio_backend.py

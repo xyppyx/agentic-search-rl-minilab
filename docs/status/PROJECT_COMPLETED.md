@@ -270,3 +270,10 @@
   - 相关路径：`docs/interview/interview_qa_quick_reference.md`、`docs/interview/one_page_project_pitch.md`、`docs/interview/README.md`
   - 验证方式：新增两份面向口述的 Markdown 材料；内容只使用既有状态文件中已记录的 dev70、bridge150、patched protocol、reward shaping 和工具成功率事实；运行 `find docs/interview -maxdepth 2 -type f | sort` 检查目录结构，并运行 `git diff --check`。
   - 关键结果：新增高频追问速查版，覆盖项目一句话、为什么不是普通 RAG、Search-R1/ReAct/RAG 区别、turn-level credit、reward shaping 失败经验、patched protocol、指标边界、工具成功率、local BM25 定位、offline diagnostics 和下一步；新增一页纸项目讲稿，包含 30 秒精简版、2 分钟完整版、简历口述版、指标边界口径和高频追问速答。
+
+## 2026-08-10
+
+- 原教学复现目录已归档到 `Backup` 分支，并从 `main` 删除。
+  - 相关路径：`00-loss-function/`、`01-grpo/`、`02-opd/`、`03-search-r1/`、`README.md`、`AGENTS.md`、`my-search-r1/README.md`、`docs/design/idea.md`、`docs/status/`
+  - 验证方式：在干净 `main` 上创建 `Backup` 分支，确认 `Backup` 与删除前 `main` 同指向提交 `c58c6af`；在 `main` 执行目录删除并更新入口文档与状态文件；后续以 `git status`、`git ls-files`、`rg`、`git diff --check` 和 `my-search-r1` 测试验证。
+  - 关键结果：四个教学目录由 `Backup` 分支保留，`main` 后续只承载 `my-search-r1/`、`docs/` 等项目自有实现和公开文档；过时的 `03-search-r1/train.py` 本地改动保护风险已从 TODO 移除。

@@ -17,7 +17,7 @@
 - `configs/`：可公开的 smoke/eval/train 配置模板。
 - `scripts/`：数据准备、rollout、训练、评测和报告命令入口。
 
-实现前以 [../03-search-r1/](../03-search-r1/) 为基线参考，以 [../docs/design/idea.md](../docs/design/idea.md) 为路线依据。reward shaping 版本和下一轮实验计划维护在 [../docs/design/reward_shaping_plan.md](../docs/design/reward_shaping_plan.md)。真实凭据写入本地 `.env`，公开模板写入 `.env.example`。
+本目录以 [../docs/design/idea.md](../docs/design/idea.md) 为路线依据；原 `03-search-r1/` 教学基线已归档到 `Backup` 分支。reward shaping 版本和下一轮实验计划维护在 [../docs/design/reward_shaping_plan.md](../docs/design/reward_shaping_plan.md)。真实凭据写入本地 `.env`，公开模板写入 `.env.example`。
 
 ## 当前已实现
 

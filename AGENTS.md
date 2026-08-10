@@ -11,7 +11,7 @@
 
 本项目基于原作者 `KMnO4-zx/llm-agent-rl-lab` 的教学复现仓库，围绕 Search-R1、GRPO、OPD 等 LLM/Agent 强化学习方法做学习、复现和改造。当前个人项目主线是 `docs/design/idea.md` 中的 Robust Search-R1 MiniLab：在低成本、多工具、不可靠工具环境下，构建可控、可观测、可扩展的搜索型 Agentic RL 实验框架。
 
-`00-loss-function/`、`01-grpo/`、`02-opd/`、`03-search-r1/` 保留为上游教学复现和对照基线；除非任务明确要求维护基线，不把这些目录中的既有能力包装为本项目新增成果。改进实现默认放在 `my-search-r1/`，设计、复盘和长期记录放在 `docs/`。
+上游教学复现目录 `00-loss-function/`、`01-grpo/`、`02-opd/`、`03-search-r1/` 已归档到 `Backup` 分支；`main` 只保留本项目自有实现、设计和复盘材料。改进实现默认放在 `my-search-r1/`，设计、复盘和长期记录放在 `docs/`。除非任务明确要求恢复或对照历史基线，不把备份分支中的既有教学能力包装为本项目新增成果。
 
 本项目是个人学习型 POC，不代表 PyTRIO、SwanLab、知乎开放平台、Search-R1 官方实现或原作者参与、委托或认可。在线搜索 API、模型服务、实验日志和远程训练凭据都按敏感运行资源处理。
 
@@ -29,14 +29,11 @@
 
 ## 目录索引
 
-- `00-loss-function/`：上游 loss function 教学材料和静态图片，作为概念参考。
-- `01-grpo/`：上游 GRPO 最小复现，作为 RL 训练循环参考。
-- `02-opd/`：上游 OPD 与 Medical OPD 复现，作为偏好优化和评测脚本参考。
-- `03-search-r1/`：上游 Search-R1 PyTRIO + 知乎搜索复现，作为当前改进的基线参考。
 - `my-search-r1/`：本项目 Search-R1 MiniLab 的正式改进实现目录。
 - `docs/`：设计文档、学习记录、状态事实源和实验复盘。
 - `images/`：根 README 使用的公开图片资产。
 - `.env`：本地及远程运行配置和敏感变量；`.env.example` 只保留可公开的键名与示例。
+- `Backup` 分支：归档上游教学复现目录 `00-loss-function/`、`01-grpo/`、`02-opd/`、`03-search-r1/`，用于历史参考和必要时恢复。
 
 更详细的模块信息见根目录及各一级目录的 `README.md`。
 

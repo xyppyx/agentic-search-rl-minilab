@@ -23,9 +23,23 @@
 - `docs/status/PROJECT_TODO.md`：进行中任务、下一步、验收条件、阻塞项和未解决风险。
 - `docs/status/PROJECT_LOG.md`：需要长期追溯的重要事件、方向变化、问题解决和阶段复盘。
 
+`docs/status/archive/` 仅保存历史快照，供追溯压缩前状态使用；其中内容不得作为当前进度、当前 TODO、当前基线或当前实验结论。需要旧实验细节时优先读取 `docs/interview/lesson/` 的复盘文档，再按需查看 archive。
+
 开始任务前读取适用的 `AGENTS.md`、`PROJECT_COMPLETED.md` 和 `PROJECT_TODO.md`；仅在需要追溯时读取 `PROJECT_LOG.md`，并按需读取相关 `README.md`。不要仅依赖对话历史。
 
 完成可独立验证的产物、取得实验或评测结果、作出关键决策、发现阻塞或准备实质性提交时更新状态文件。代码写完但未验证不能记为完成；完成项需注明时间、相关路径、验证方式和关键结果。TODO 完成后移入 COMPLETED，不创建 `TODO.md`、`STATUS.md` 等平行状态文件。
+
+状态文件采用“当前快照 + 活跃 TODO + 决策日志”写法，不写成长实验流水账。`PROJECT_COMPLETED.md` 写当前可引用结论、基线表、已验证能力和历史阶段索引；`PROJECT_TODO.md` 只写活跃任务、验收条件、停止条件和未解决风险；`PROJECT_LOG.md` 只写长期决策和方向变化。训练、评测、排查过程、完整命令、详细指标和 case review 默认写入 `docs/interview/lesson/`，status 只链接或概括其结论。
+
+满足任一条件时，先压缩 status，再进入下一阶段实质实验或提交准备：
+
+- 切换到新的方法主线、实验分支或 active track 前。
+- 一个实验阶段完成，已经形成明确 baseline、最优 checkpoint、失败结论和下一步时。
+- `PROJECT_COMPLETED.md` 超过约 120 行，或 `PROJECT_TODO.md` 超过约 80 行时。
+- 同一 active track 下累计 5 个以上训练、评测、重跑或 health/retry 记录时。
+- TODO 中已完成、暂停、当前任务和历史解释开始混杂时。
+
+压缩 status 时可先在 `docs/status/archive/YYYY-MM-DD_reason/` 保存当前三份 `PROJECT_*.md` 快照，并在 archive README 中声明其仅供历史追溯。压缩后当前三份 `PROJECT_*.md` 必须仍是唯一事实源，且不能丢失当前 baseline、验收条件、停止条件和公开边界。
 
 ## 目录索引
 

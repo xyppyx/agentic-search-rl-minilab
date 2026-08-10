@@ -1,43 +1,44 @@
 # Project TODO
 
-本文件记录进行中任务、下一步、验收条件、阻塞项和未解决风险。完成且验证后移入 `PROJECT_COMPLETED.md`。
+本文件只记录当前活跃任务、下一步、验收条件、阻塞项和未解决风险。旧 reward shaping 与 targeted eval 流水账已压缩到 `PROJECT_COMPLETED.md` 的历史阶段索引；压缩前全文位于 `docs/status/archive/2026-08-10_pre_cleanup/`，仅供追溯参考。
 
-## 近期任务
+## Active Track: Gated OPSD
 
-- 设计下一轮 reward shaping 训练策略。
-  - 验收条件：基于 2026-07-21 至 2026-07-22 的 checkpoint 对比结果、offline diagnostics、reward sensitivity 和 `docs/design/reward_shaping_plan.md`，明确下一轮是否做 no-empty/lower-penalty ablation、必要搜索/follow-up 正向门控或多 seed 稳定性重复实验。
-  - 当前状态：2026-07-21 至 2026-07-22 已完成 reward 设计记录表、base/5-step/penalty/20-step Zhihu dev 70 对比、5-step/20-step gained-lost case review、三类 offline diagnostics、reward sensitivity/rescore，`penalty_v2_candidate` 的 5-step/20-step SwanLab 在线训练，`penalty_v2_plus_max_search_001`、`penalty_v2_plus_max_search_0005` 的 5-step 小实验，三个关键 checkpoint 的 gained/lost case review，`penalty_v3_followup_aware` 的实现、离线 sensitivity、5-step 在线训练和 dev 评测，`reward_v4_followup_bonus` 的实现、离线 sensitivity、5-step 在线训练和 dev 评测，v3 `group_size=8` 稳定性对照，prompt/rollout 层多跳 follow-up 与短答案格式约束的本地实现，prompt 约束版 Zhihu dev-5/dev 70 效果对照，prompt 约束基础上的 v3 follow-up-aware/bad-loop 5-step 小预算训练，search-first prompt dev 70 对照，`reward_v5_no_search_guard` 实现、离线 sensitivity、一次 50-step 中断复盘和一次 20-step 训练/eval，`prompt_search_budget_guard` 的 dev-5/dev 70 对照，以及 GRPO KL/std 训练稳定性改造和 5-step Zhihu 小实验。当前最高 prompt-only base 是 `prompt_search_budget_guard` 的 EM 0.4143、format 0.8857。2026-07-22 已开始单因素 ablation：`std+clip only` 完成 5-step 训练和 dev-5，dev-5 EM 0.4000、format 0.8000、平均搜索 3.0000；`std+clip only` full dev、`KL only` train 和 base dev-1 smoke 均卡在 PyTRIO sampling await，已中断并记录到 `docs/interview/lesson/2026-07-22_grpo_kl_std_ablation_partial.md`。随后完成 `prompt_budget_kl_std_20step` retry：20/20 step 完成，dev 70 EM 0.3714、format 0.9857、平均搜索 1.4571、`missing_followup_query=3`，相对 5-step gained 0/lost 4，未通过扩大训练门槛。`turn_credit_helpful_bridge` 5-step 追平 EM 0.4286，format 提升到 0.9714、平均搜索降到 1.8571；但 20-step 退化到 EM 0.3714、`missing_followup_query=3`，相对 5-step gained 1/lost 5，不扩大到 50-step。`turn_credit_evidence_bridge_v2` 已完成实现、历史离线门槛检查、local smoke、5-step、20-step 和按用户要求追加的 50-step 训练/eval：20-step dev 70 EM 0.4429、format 1.0000、平均搜索 1.7714、`missing_followup_query=0`，成为当前最强 checkpoint 证据；50-step dev 70 EM 0.4000、format 1.0000、平均搜索 1.7429、`missing_followup_query=0`，相对 20-step gained 0/lost 3，未优于 20-step。
-  - 2026-08-05 补充状态：`turn_credit_final_hop_bridge_v3` 已在 `exp/final-hop-bridge-guard` 完成实现、local smoke、5-step Zhihu 训练、dev70 和 `bridge_eval_150` 评测。Dev70 EM 0.4286、format 0.9714、Zhihu success rate 1.0，通过不明显退化门槛；bridge150 EM macro 0.4767、correct 77/150、format 0.7600、Zhihu success rate 1.0。相对 bridge prompt-only base 的 EM macro 0.4750、correct 74/150 有轻微正向，但未达到 format >= 0.9000 的完整门槛，也弱于 evidence 20-step 的 correct 81/150、format 0.9400。训练与 bridge turn-credit analysis 中 `missing_final_hop_attribute` 均为 0，说明 missing-final-hop penalty 过于保守。
-  - 2026-08-05 修正状态：已完成 final-hop v3 guard fix。`--final-answer-guard-turn-penalty` 默认关闭新增，可惩罚搜过后 max-search 不答或 invalid final answer 的最后一轮；`missing_final_hop_attribute` 改为 query 显式属性覆盖优先，date 类不再被 observation 任意年份误覆盖。对既有 bridge150 结果离线分析，`missing_final_hop_penalty_records=1`，`final_answer_guard_penalty_records=34`；完整 unittest 87 个通过，local BM25 1-step smoke 通过。尚未重新跑 Zhihu 训练/eval。
-  - 2026-08-05 训练状态：已按 guard fix 参数完成 `turn-credit-final-hop-guardfix-5step-20260805` 真实 Zhihu 5-step 训练。训练阶段工具事件 86/86 成功，`final_answer_guard=6`、`missing_final_hop_attribute=2`，说明新信号进入真实训练。Dev70 eval 有效，Zhihu success rate 1.0，EM 0.4286、format 0.9857、平均搜索 1.8000。Bridge150 eval 未通过工具门槛，Zhihu success rate 0.9855，出现 7 个 `url_error`；参考值 EM macro 0.5042、correct 79/150、format 0.7933 不进入正式比较。
-  - 2026-08-05 key2 状态：按用户要求强制只用第二个 Zhihu key 跑 bridge-5 health，Zhihu requests 14、success rate 0.0000、rate-limit rate 1.0000；第二个 key 已被限流，因此未运行完整 bridge150。
-  - 2026-08-05 key1 rerun 状态：按用户要求强制只用原 Zhihu key 重跑。bridge-5 health 通过，Zhihu requests 10、success rate 1.0；完整 bridge150 仍未过门槛，Zhihu requests 483、success rate 0.9979，`dev_7742` 出现 1 个 `parse_error`。参考值 EM macro 0.4817、correct 79/150、format 0.7867 不进入正式比较。
-  - 2026-08-05 patched 状态：按用户要求单独补跑唯一失败样本 `dev_7742`，Zhihu requests 4、success rate 1.0、exact match 1、format 1.0；将该记录替换 key1 full rerun 的失败记录后，patched bridge150 tool failures 0、EM macro 0.4842、correct 80/150、format 0.7933、平均搜索 3.2200。该结果说明 guard-fix 在 bridge EM/correct 上相对 prompt-only base 有小幅正向，但仍低于 format 0.9000 门槛，且 patched 结果不是独立全量 run。
-  - 2026-08-06 20-step 状态：按用户要求已运行 `turn-credit-final-hop-guardfix-20step-20260806`，训练 20/20 step 完成，训练阶段 tool failures 0，turn-credit 信号继续命中。首次 final dev70 eval 的 Zhihu success rate 只有 0.9407，3 条样本共 8 个 `url_error`，未通过工具门槛；按用户要求重试后 dev70 有效，Zhihu success rate 1.0，EM macro 0.4571、format 0.9571、平均搜索 1.9000、`missing_followup_query=0`。bridge-5 health 通过；完整 bridge150 success rate 0.9896，因 3 条样本共 5 个 `url_error` 未过正式工具门槛；随后对 3 条失败样本重跑并生成 patched bridge150，tool failures 0、EM macro 0.5142、correct 83/150、format 0.8267。
-  - 下一步：保留 `prompt_search_budget_guard` 作为最强公开 prompt base，保留 `turn_credit_evidence_bridge_20step` 作为当前最强 checkpoint 证据；后续训练默认采用当前 prompt、base reward、std normalization、advantage clip 和 KL-style reference 约束，但不能假设步数越多越好。std/KL 单因素消融优先级下调；若继续推进 turn-level credit，优先做 evidence v2 的 20-step 多 seed 稳定性，或在 v2 基础上补 alias-aware/answer-normalization 诊断、bad-loop/final-answer/format 约束后再做小预算对照；不建议继续扩大到更长步数。若知乎 API 出现 429、timeout、credential/http error、`tool_failures > 0` 或 success rate 低于 1.0，停止实验并总结；若 PyTRIO sampling await 超过 2 分钟无进度，停止当前 run 并记录为外部 sampling 阻塞。
-  - 2026-08-06 下一步调整：guard-fix 20-step patched bridge150 是当前最高 bridge EM/correct 证据，但必须显式标注由 147 条 full run + 3 条 retry 合成，不能等同独立全量 success rate 1.0 run。若追求严格正式结论，等待 Zhihu 稳定后重跑一次独立全量 bridge150；若继续算法改进，优先解决 format/max-search no-answer，因为 patched format 0.8267 仍低于 evidence-v2 20-step 的 0.9400。
+目标：在不破坏现有 turn-level credit 主线的前提下，评估是否能加入 gated on-policy self-distillation 作为辅助 loss，为 Search-R1 Agent 提供更密集的 token-level 训练信号。
 
-- 完成 targeted eval 三模型对比。
-  - 验收条件：在 `bridge_eval_150.jsonl` 与 `alias_granularity_eval_80.jsonl` 上分别完成 prompt-only base、`turn_credit_evidence_bridge_20step`、`turn_credit_evidence_bridge_50step` 的 Zhihu eval；每个 run success rate 必须为 1.0，随后输出 EM、format、平均搜索、`missing_followup_query`、possible alias false negative 和 gained/lost。
-  - 当前状态：2026-07-22 已生成两个 targeted eval 集和 manifest；首次运行 `bridge_prompt_base` 生成 150 条 trajectory，但 Zhihu tool events 515 次中只有 154 次成功，361 次 `parse_error: TypeError`，success rate 0.2990，error rate 0.7010，已按项目规则停止后续 20-step/50-step 与 alias eval，当前结果不可用于模型效果对比。随后确认原因是主 Zhihu API key 访问次数到顶，已实现 `ZHIHU_API_KEY2` fallback，并通过单 query health check。重跑 `bridge_prompt_base_retry_20260722` 后，150 条 trajectory 生成，但 tool events 532 次中只有 9 次成功、523 次 `rate_limited`，success rate 0.0169、rate limit rate 0.9831，说明两个 key 在正式 targeted eval 中均已被限流；该结果同样不可用于模型效果对比。2026-07-23 `ZHIHU_API_KEY` 恢复后，先跑 `bridge_prompt_base_health10_20260723`，Zhihu requests 32、success rate 1.0；随后完整重跑 `bridge_prompt_base_20260723`，Zhihu requests 496、success rate 1.0，EM macro 0.4750、format 0.7200、平均搜索 3.3067、`missing_followup_query=3`、`possible_alias_match=3`，已得到有效 bridge prompt-only base。随后完成 `turn_credit_evidence_bridge_20step` bridge eval，Zhihu requests 464、success rate 1.0，EM macro 0.4583、overall correct 81/150、format 0.9400、平均搜索 3.0933、`missing_followup_query=5`，相对 prompt-only base gained 12/lost 5。`turn_credit_evidence_bridge_50step` bridge eval 也已运行，但 Zhihu success rate 0.9979，`dev_9212` 出现 1 次 `parse_error: TypeError`，未通过每个 run success rate 1.0 的验收门槛，只能作为参考；参考指标为 EM macro 0.4733、overall correct 78/150、format 0.8400、平均搜索 3.1733，相对 20-step gained 5/lost 8。2026-07-23 首次运行 `alias_granularity_eval_80` prompt-only base 因 `dev_8490` 1 次 `parse_error: TypeError` 未通过工具门槛；随后修复 Zhihu parse error 响应体记录并重跑 alias prompt-only base，Zhihu requests 132、success rate 1.0，EM macro 0.4500、overall correct 36/80、format 0.9250；alias 20-step eval Zhihu requests 121、success rate 1.0，EM macro 0.4375、overall correct 35/80、format 0.9625、平均搜索 1.5125，相对 base gained 1/lost 2。已完成 targeted eval base-vs-20step case review：bridge 12 个 gained 主要是 max-search/invalid format 被修复，lost 主要是 early answer/final-hop 被压缩；alias 1 gained 是格式收束收益，2 lost 都是国籍/实体绑定早答错。
-  - 2026-08-05 补充状态：新增 final-hop v3 bridge150 有效评测，Zhihu success rate 1.0，EM macro 0.4767、overall correct 77/150、format 0.7600、平均搜索 3.2267；相对 prompt-only base gained 7/lost 4、net +3，相对 evidence 20-step gained 10/lost 14、net -4。该结果可说明 final-hop credit 对 bridge EM/correct 有轻微正向，但不能替代 evidence 20-step，也未解决 format 门槛。
-  - 2026-08-05 修正状态：guard fix 已在既有 final-hop v3 bridge150 JSONL 上完成离线检查，新增 `final_answer_guard_penalty_records=34`，直接覆盖本轮 format 退化中的 max-search/no-answer 主因；`missing_final_hop_penalty_records=1`，说明属性缺失 detector 已能在真实 wrong-valid 样本中命中，但命中范围仍偏保守。
-  - 2026-08-05 训练状态：guard-fix 5-step final weights 的 bridge150 eval 已运行，但因 Zhihu success rate 0.9855、7 个 `url_error` 未通过 targeted eval 工具门槛；参考指标为 EM macro 0.5042、overall correct 79/150、format 0.7933、平均搜索 3.2200。该结果只能说明值得重跑，不能作为正式超过 base 的证据。
-  - 2026-08-05 key2 状态：第二个 Zhihu key 的 bridge-5 health success rate 0.0000、rate-limit rate 1.0000，不能用于重跑完整 targeted bridge。
-  - 2026-08-05 key1 rerun 状态：原 Zhihu key 完整 bridge150 rerun success rate 0.9979，因 `dev_7742` 1 个 `parse_error` 仍未过工具门槛；参考 EM macro 0.4817、overall correct 79/150、format 0.7867 不能进入正式表格。
-  - 2026-08-05 patched 状态：已验证可以只补跑错误 case。`dev_7742` 单样本补跑 success rate 1.0 且答对；patched bridge150 为 EM macro 0.4842、overall correct 80/150、format 0.7933、tool failures 0。若报告采用 patched 协议，需要显式说明它由 149 条原 full rerun + 1 条单样本 rerun 组成，不等同一次独立全量评测。
-  - 2026-08-06 20-step 状态：guard-fix 20-step 已完成训练，首次 dev70 eval 因 Zhihu `url_error` 未通过工具门槛；重试 dev70 有效，Zhihu success rate 1.0，EM macro 0.4571、format 0.9571、平均搜索 1.9000。bridge-5 health 通过；完整 bridge150 success rate 0.9896 未过正式门槛，随后对 3 条失败样本重跑并生成 patched bridge150，tool failures 0、EM macro 0.5142、correct 83/150、format 0.8267。
-  - 下一步：若坚持完整三模型 bridge 对比，先在 Zhihu health check 正常后重跑 `turn_credit_evidence_bridge_50step` 的 `bridge_eval_150.jsonl`，必须 success rate 1.0；否则暂停三模型结论，优先基于本轮 case review 设计 final-hop guard、国籍/日期属性 query 保护和 answer normalization diagnostics。
-  - 2026-08-06 下一步调整：targeted bridge 后续若追求严格正式结论，应重跑 guard-fix 20-step bridge150 独立全量 eval，要求 success rate 1.0；若采用 patched 协议，正式表格必须显式标注其来源并与独立全量 run 区分。当前更紧迫的算法短板是 format/max-search no-answer，guard-fix 20-step patched 虽有最高 EM/correct，但 format 0.8267 仍不够。
+### 1. Freeze Pre-OPSD Baseline
+
+- 验收条件：明确后续 OPSD 对照使用的 baseline、checkpoint、评测集、参数和公开指标口径。
+- 当前建议：以 `prompt_search_budget_guard`、`turn_credit_evidence_bridge_20step`、`turn-credit-final-hop-guardfix-20step-20260806` 作为三类基线；bridge150 的 guard-fix 结果必须标注 patched protocol。
+- 停止条件：如果无法定位可用 sampler weights 或必要评测 JSONL，先补状态记录，不进入 OPSD 实现。
+
+### 2. OPSD Feasibility Smoke
+
+- 验收条件：在 local/mock 小样本上验证 teacher/self-teacher logprob 能与 student rollout target tokens 对齐，并记录 token 数、mask 数、缺失 logprob 数和 loss 数值范围。
+- 技术方向：复用现有 `compute_reference_logprobs()`、`TrainingDatum`、custom loss 路径；新增 teacher context builder 和 OPSD mask。
+- 停止条件：teacher logprob 长度无法稳定对齐、tokenizer 不兼容、tool observation token 被错误纳入训练，或 smoke loss 出现 NaN/inf。
+
+### 3. Gated OPSD Auxiliary Loss
+
+- 验收条件：实现默认关闭的 `--opsd-coef`、`--opsd-context-policy`、`--opsd-mask-policy`；GRPO/turn-credit 仍为主 loss，OPSD 只作为小系数辅助项。
+- 推荐初始策略：只在 final-answer/guard 命中 turn 上启用 OPSD，不做全序列蒸馏，不蒸馏 tool observation tokens。
+- 停止条件：naive full-sequence OPSD、gold answer teacher 诱导少搜/早答、或 distillation token 占比失控。
+
+### 4. Evaluation Ladder
+
+- 验收条件：依次完成 local BM25 1-step smoke、Zhihu dev-5 health、dev70 小预算对照；只有 dev70 不明显退化时才考虑 bridge150 或 alias80。
+- 关键指标：EM、correct、format、平均搜索、`missing_followup_query`、`bad_max_search_loop`、tool success rate、OPSD mask 命中率、teacher-student logprob gap。
+- 停止条件：Zhihu API 出现 429、timeout、credential/http error、`tool_failures > 0` 或 success rate < 1.0；PyTRIO sampling await 超过 2 分钟无进度；OPSD 明显降低 format 或增加 missing follow-up。
+
+## Parked Historical Tracks
+
+- Reward penalty v1/v2/v3/v4、max-search penalty、follow-up bonus、no-search guard 等旧 ablation 暂停，不再作为活跃 TODO。
+- KL/std 单因素消融优先级下调；当前默认训练配置继续保留 KL/std 稳定化组合。
+- Evidence-v2 50-step 和 guard-fix 独立 full bridge150 可作为后续严谨评测补充，但不是 gated OPSD 前置条件。
 
 ## 未解决风险
 
-- `my-search-r1/` 当前已有搜索工具层、trajectory JSONL、报告能力、训练级 rollout、PyTRIO train/eval CLI、完整数据集、一次非退化 1-step GRPO 更新证据、一次 5-step reward shaping checkpoint 对照、一次原始 reward 20-step checkpoint 对照、offline diagnostics、reward sensitivity，`penalty_v2_candidate` 的 5-step/20-step SwanLab 在线训练，v2+max-search 0.01/0.005 小实验，关键 checkpoint gained/lost case review，v3 follow-up-aware penalty 实现和小实验，v4 正向 follow-up bonus 实现/离线 sensitivity/小实验，v3 group size 8 对照，prompt/rollout 层 follow-up 约束的本地实现和 Zhihu dev 对照，prompt 约束基础上的小预算训练，v5 no-search guard 小实验，`prompt_search_budget_guard` prompt-only 最强 base，KL/std 稳定化 GRPO 5-step 正向结果，KL/std 20-step retry 负向结果，turn-level search credit 5-step 弱正向、20-step 负向结果，以及 turn-level evidence credit v2 5-step/20-step 机制和训练证据；KL/std 单因素 ablation 尚未完成 full dev 归因，多 seed 稳定性重复实验也尚未完成。
-- 真实知乎搜索 API、PyTRIO 远程训练和 SwanLab 记录依赖外部凭据与服务状态，后续实验需要 mock baseline 与真实 backend 指标分开记录。2026-07-23 的 bridge 50-step targeted eval 出现 1 次 Zhihu `parse_error: TypeError`，再次说明 success rate 未达 1.0 的 run 不应进入正式模型效果结论。
-- 当前 dev 失败复盘显示 local BM25 只适合 smoke/mock；完整 dev 上空结果率 56.92%，不宜用它代表真实搜索能力。Zhihu dev 主要失败不在工具异常，而在格式收束、query 改写、证据阅读和严格 EM 对冗长答案/日期格式的误伤。2026-07-21 的 5-step 对比进一步显示，轻量 penalty 能减少过度搜索但可能损伤答对率，需要更谨慎的权重或训练日程。
-- 2026-08-05 final-hop v3 显示 bridge targeted 的 EM/correct 可以轻微超过 prompt-only base，但 format 从预设门槛 0.9000 落到 0.7600，且 `missing_final_hop_attribute` 没有在训练或 bridge 分析中实际命中；后续若把它用于简历项目，必须如实呈现为“发现问题并定位下一步”的负向/混合实验，而不是最终最强指标。
-- 2026-08-05 guard-fix 5-step 的 dev70 结果有效且 format 0.9857，但 bridge150 因 7 个 Zhihu `url_error` 未通过工具门槛；参考 EM macro 0.5042 不能写入正式结论或简历指标，必须等 success rate 1.0 的 rerun。
-- 第二个 Zhihu key 当前已被限流；继续强行跑完整 targeted eval 只会产生无效结果和额外成本。后续需要等 quota 恢复、切换新的可用 key，或降低到 health/smoke 级别。
-- 原 Zhihu key 的 rerun 也因 1 个 parse error 未达 success rate 1.0；单样本补跑证明可以用 patched 协议避免全量重跑，但正式论文式评测仍应优先追求独立全量 success rate 1.0。当前即使按 patched 计算，guard-fix bridge format 也只有 0.7933，仍是进入简历核心指标前的主要短板。
-- 2026-08-06 guard-fix 20-step 首次 dev70 评测出现 8 个 Zhihu `url_error`，success rate 0.9407；重试后 dev70 success rate 1.0。后续 bridge150 仍需先跑 health check，避免外部搜索 backend 波动导致无效 targeted eval。
-- 2026-08-06 guard-fix 20-step bridge150 full run 仍出现 5 个 Zhihu `url_error`，success rate 0.9896；patched 协议能避免全量重跑成本，但不能替代独立全量 success rate 1.0 的正式论文式评测。
+- 真实 Zhihu Search API、PyTRIO 远程训练和 SwanLab 依赖外部服务状态；任何真实搜索实验都必须先做 health check，并分开记录工具失败与模型策略失败。
+- 当前 bridge150 最强 guard-fix 指标是 patched protocol，不应包装成论文式独立 full run。
+- OPSD/OPD 类方法容易把 teacher 的短答案偏好转化成少搜/早答，需要 gate、mask 和 stop condition 约束。
+- Alias/granularity eval 尚未验证 guard-fix 20-step，后续如果宣称泛化收益必须补跑。

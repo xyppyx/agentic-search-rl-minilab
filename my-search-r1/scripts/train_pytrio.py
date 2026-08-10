@@ -28,6 +28,7 @@ from search_r1_minilab.training import (
     pick_mean_loss_metric,
     rollout_metrics,
     save_checkpoint,
+    TurnCreditConfig,
     weight_micro_batch_items_for_global_mean,
 )
 from search_r1_minilab.trajectories import build_markdown_report, write_trajectory_jsonl
@@ -71,6 +72,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--multi-candidate-answer-penalty", type=float, default=0.0)
     parser.add_argument("--helpful-followup-bonus", type=float, default=0.0)
     parser.add_argument("--no-search-penalty", type=float, default=0.0)
+    parser.add_argument(
+        "--turn-credit-policy",
+        choices=["none", "helpful_bridge", "evidence_bridge", "final_hop_bridge"],
+        default="none",
+    )
+    parser.add_argument("--helpful-search-turn-bonus", type=float, default=0.0)
+    parser.add_argument("--evidence-search-turn-bonus", type=float, default=0.0)
+    parser.add_argument("--final-hop-search-turn-bonus", type=float, default=0.0)
+    parser.add_argument("--early-answer-turn-penalty", type=float, default=0.0)
+    parser.add_argument("--missing-final-hop-turn-penalty", type=float, default=0.0)
+    parser.add_argument("--final-answer-guard-turn-penalty", type=float, default=0.0)
     parser.add_argument("--verbose-answer-penalty", type=float, default=0.0)
     parser.add_argument("--verbose-answer-token-threshold", type=int, default=0)
     parser.add_argument("--temperature", type=float, default=1.0)
@@ -144,6 +156,15 @@ def main(args: argparse.Namespace | None = None) -> None:
         advantage_clip=args.advantage_clip,
         reward_shaping=_reward_shaping_config(args),
     )
+    turn_credit_config = TurnCreditConfig(
+        policy=args.turn_credit_policy,
+        helpful_search_turn_bonus=args.helpful_search_turn_bonus,
+        evidence_search_turn_bonus=args.evidence_search_turn_bonus,
+        final_hop_search_turn_bonus=args.final_hop_search_turn_bonus,
+        early_answer_turn_penalty=args.early_answer_turn_penalty,
+        missing_final_hop_turn_penalty=args.missing_final_hop_turn_penalty,
+        final_answer_guard_turn_penalty=args.final_answer_guard_turn_penalty,
+    )
     adam_params = trio.AdamParams(
         learning_rate=args.learning_rate,
         beta1=args.beta1,
@@ -189,7 +210,7 @@ def main(args: argparse.Namespace | None = None) -> None:
                     )
 
                 train_bar.set_postfix(phase="build datums", refresh=True)
-                datums = build_training_datums(trajectories)
+                datums = build_training_datums(trajectories, turn_credit_config)
                 if reference_client is not None and datums:
                     train_bar.set_postfix(phase="reference logprobs", refresh=True)
                     datums = add_reference_logprobs(datums, reference_client)
@@ -238,6 +259,7 @@ def main(args: argparse.Namespace | None = None) -> None:
                     datums,
                     micro_batches,
                     len(batch),
+                    turn_credit_policy=args.turn_credit_policy,
                 )
                 metrics.update(registry.metrics())
                 metrics.update(merge_trainer_metrics(trainer_results))

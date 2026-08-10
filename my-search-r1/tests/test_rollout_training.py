@@ -28,6 +28,7 @@ from search_r1_minilab.training import (
     datum_loss_token_count,
     evaluation_metrics,
     pack_micro_batches,
+    TurnCreditConfig,
     weight_micro_batch_for_global_mean,
     weight_micro_batch_items_for_global_mean,
 )
@@ -176,6 +177,409 @@ class TrainingRolloutTest(unittest.TestCase):
         self.assertEqual(datum.num_tokens, 5)
         self.assertEqual(advantages, [0.0, 2.0, 2.0, 0.0, 2.0])
         self.assertEqual(datum_loss_token_count(datum), 3)
+
+    def test_turn_credit_none_preserves_trajectory_advantage(self) -> None:
+        trajectory = _turn_credit_candidate(advantage=-0.5)
+
+        datums = build_training_datums(
+            [trajectory],
+            TurnCreditConfig(policy="none", helpful_search_turn_bonus=0.10),
+        )
+        advantages = datums[0].datum.loss_fn_inputs["advantages"].to_numpy().tolist()
+
+        self.assertEqual(advantages, [0.0, -0.5, 0.0, -0.5])
+        self.assertEqual(trajectory.turns[1].credit_label, "")
+
+    def test_helpful_bridge_turn_credit_overrides_wrong_valid_search_turn(self) -> None:
+        trajectory = _turn_credit_candidate(advantage=-0.5)
+
+        datums = build_training_datums(
+            [trajectory],
+            TurnCreditConfig(
+                policy="helpful_bridge",
+                helpful_search_turn_bonus=0.10,
+            ),
+        )
+        advantages = datums[0].datum.loss_fn_inputs["advantages"].to_numpy().tolist()
+        record = trajectory_to_record(trajectory, run_type="train")
+
+        self.assertEqual(advantages[:3], [0.0, -0.5, 0.0])
+        self.assertAlmostEqual(advantages[3], 0.1)
+        self.assertEqual(trajectory.turns[1].credit_label, "helpful_bridge_search")
+        self.assertEqual(
+            record["metadata"]["turn_credits"][0]["query"],
+            "Aelia Paetina father",
+        )
+
+    def test_turn_credit_rejects_repeated_first_empty_invalid_and_correct(self) -> None:
+        config = TurnCreditConfig(
+            policy="helpful_bridge",
+            helpful_search_turn_bonus=0.10,
+        )
+        candidates = [
+            _turn_credit_candidate(advantage=-0.5, second_query="Claudia Antonia mother"),
+            _turn_credit_candidate(advantage=-0.5, empty_previous_observation=True),
+            _turn_credit_candidate(advantage=-0.5, valid_format=False),
+            _turn_credit_candidate(advantage=-0.5, exact_match=True),
+            _turn_credit_candidate(advantage=-0.5, search_calls=1),
+        ]
+
+        datums = build_training_datums(candidates, config)
+
+        self.assertEqual(len(datums), len(candidates))
+        for trajectory in candidates:
+            self.assertTrue(all(not turn.credit_label for turn in trajectory.turns))
+
+    def test_turn_credit_builds_datum_when_group_advantage_is_zero(self) -> None:
+        trajectory = _turn_credit_candidate(advantage=0.0)
+
+        datums = build_training_datums(
+            [trajectory],
+            TurnCreditConfig(
+                policy="helpful_bridge",
+                helpful_search_turn_bonus=0.10,
+            ),
+        )
+
+        self.assertEqual(len(datums), 1)
+        self.assertEqual(datum_loss_token_count(datums[0]), 1)
+
+    def test_evidence_bridge_rewards_entity_backed_second_search(self) -> None:
+        trajectory = _turn_credit_candidate(
+            advantage=-0.5,
+            second_query="Aelia Paetina parents",
+        )
+
+        datums = build_training_datums(
+            [trajectory],
+            TurnCreditConfig(
+                policy="evidence_bridge",
+                evidence_search_turn_bonus=0.10,
+                early_answer_turn_penalty=0.05,
+            ),
+        )
+        advantages = datums[0].datum.loss_fn_inputs["advantages"].to_numpy().tolist()
+        record = trajectory_to_record(trajectory, run_type="train")
+
+        self.assertEqual(advantages[:3], [0.0, -0.5, 0.0])
+        self.assertAlmostEqual(advantages[3], 0.1)
+        self.assertEqual(trajectory.turns[1].credit_label, "evidence_bridge_search")
+        self.assertEqual(
+            record["metadata"]["turn_credits"][0]["label"],
+            "evidence_bridge_search",
+        )
+        self.assertEqual(
+            record["metadata"]["turn_credits"][0]["query"],
+            "Aelia Paetina parents",
+        )
+
+    def test_evidence_bridge_rejects_weak_or_ineligible_search_turns(self) -> None:
+        config = TurnCreditConfig(
+            policy="evidence_bridge",
+            evidence_search_turn_bonus=0.10,
+            early_answer_turn_penalty=0.05,
+        )
+        candidates = [
+            _turn_credit_candidate(advantage=-0.5, search_calls=1),
+            _turn_credit_candidate(advantage=-0.5, second_query="Claudia Antonia mother"),
+            _turn_credit_candidate(advantage=-0.5, empty_previous_observation=True),
+            _turn_credit_candidate(advantage=-0.5, empty_current_observation=True),
+            _turn_credit_candidate(advantage=-0.5, valid_format=False),
+            _turn_credit_candidate(advantage=-0.5, exact_match=True),
+        ]
+
+        build_training_datums(candidates, config)
+
+        for trajectory in candidates:
+            self.assertNotIn(
+                "evidence_bridge_search",
+                [turn.credit_label for turn in trajectory.turns],
+            )
+
+    def test_early_answer_penalty_marks_missing_followup_final_turn(self) -> None:
+        trajectory = _turn_credit_candidate(
+            advantage=-0.5,
+            search_calls=1,
+            include_final_answer_turn=True,
+            final_text="Answer: Tiberius",
+        )
+
+        datums = build_training_datums(
+            [trajectory],
+            TurnCreditConfig(
+                policy="evidence_bridge",
+                evidence_search_turn_bonus=0.10,
+                early_answer_turn_penalty=0.05,
+            ),
+        )
+        advantages = datums[0].datum.loss_fn_inputs["advantages"].to_numpy().tolist()
+        record = trajectory_to_record(trajectory, run_type="train")
+
+        self.assertAlmostEqual(advantages[-1], -0.55)
+        self.assertEqual(
+            trajectory.turns[-1].credit_label,
+            "early_answer_missing_followup",
+        )
+        self.assertEqual(
+            record["metadata"]["turn_credits"][0]["label"],
+            "early_answer_missing_followup",
+        )
+
+    def test_early_answer_penalty_rejects_correct_invalid_simple_and_empty(self) -> None:
+        config = TurnCreditConfig(
+            policy="evidence_bridge",
+            evidence_search_turn_bonus=0.10,
+            early_answer_turn_penalty=0.05,
+        )
+        candidates = [
+            _turn_credit_candidate(
+                advantage=-0.5,
+                search_calls=1,
+                include_final_answer_turn=True,
+                exact_match=True,
+            ),
+            _turn_credit_candidate(
+                advantage=-0.5,
+                search_calls=1,
+                include_final_answer_turn=True,
+                valid_format=False,
+            ),
+            _turn_credit_candidate(
+                advantage=-0.5,
+                search_calls=1,
+                include_final_answer_turn=True,
+                empty_previous_observation=True,
+            ),
+            _turn_credit_candidate(
+                advantage=-0.5,
+                search_calls=1,
+                include_final_answer_turn=True,
+                question="Who wrote Hamlet?",
+            ),
+        ]
+
+        build_training_datums(candidates, config)
+
+        for trajectory in candidates:
+            self.assertNotIn(
+                "early_answer_missing_followup",
+                [turn.credit_label for turn in trajectory.turns],
+            )
+
+    def test_final_hop_bridge_rewards_attribute_search(self) -> None:
+        trajectory = _final_hop_candidate(
+            advantage=-0.5,
+            question="When did the president who succeeded Jimmy Carter die?",
+            second_query="Ronald Reagan death date",
+            current_observation="Ronald Reagan died on June 5, 2004.",
+            answers=["June 5, 2004"],
+        )
+
+        datums = build_training_datums(
+            [trajectory],
+            TurnCreditConfig(
+                policy="final_hop_bridge",
+                evidence_search_turn_bonus=0.05,
+                final_hop_search_turn_bonus=0.10,
+                early_answer_turn_penalty=0.05,
+                missing_final_hop_turn_penalty=0.08,
+            ),
+        )
+        advantages = datums[0].datum.loss_fn_inputs["advantages"].to_numpy().tolist()
+        record = trajectory_to_record(trajectory, run_type="train")
+
+        self.assertAlmostEqual(advantages[3], 0.1)
+        self.assertEqual(
+            trajectory.turns[1].credit_label,
+            "final_hop_attribute_search",
+        )
+        self.assertEqual(
+            record["metadata"]["turn_credits"][0]["label"],
+            "final_hop_attribute_search",
+        )
+
+    def test_final_hop_bridge_does_not_reward_plain_evidence_search(self) -> None:
+        trajectory = _turn_credit_candidate(
+            advantage=-0.5,
+            question="Who is connected to Claudia Antonia?",
+            second_query="Aelia Paetina parents",
+        )
+
+        build_training_datums(
+            [trajectory],
+            TurnCreditConfig(
+                policy="final_hop_bridge",
+                final_hop_search_turn_bonus=0.10,
+                missing_final_hop_turn_penalty=0.08,
+            ),
+        )
+
+        self.assertTrue(all(not turn.credit_label for turn in trajectory.turns))
+
+    def test_missing_final_hop_penalty_marks_multi_search_early_answer(self) -> None:
+        trajectory = _final_hop_candidate(
+            advantage=-0.5,
+            question="Which film has the director who is older, Film A or Film B?",
+            first_query="Film A director",
+            first_observation="Film A was directed by John Smith.",
+            second_query="John Smith movies",
+            current_observation="John Smith directed Film A and other films.",
+            final_text="Answer: Film A",
+            answers=["Film B"],
+            include_final_answer_turn=True,
+        )
+
+        datums = build_training_datums(
+            [trajectory],
+            TurnCreditConfig(
+                policy="final_hop_bridge",
+                final_hop_search_turn_bonus=0.10,
+                missing_final_hop_turn_penalty=0.08,
+            ),
+        )
+        advantages = datums[0].datum.loss_fn_inputs["advantages"].to_numpy().tolist()
+        record = trajectory_to_record(trajectory, run_type="train")
+
+        self.assertAlmostEqual(advantages[-1], -0.58)
+        self.assertEqual(
+            trajectory.turns[-1].credit_label,
+            "missing_final_hop_attribute",
+        )
+        self.assertEqual(
+            record["metadata"]["turn_credits"][0]["label"],
+            "missing_final_hop_attribute",
+        )
+
+    def test_missing_final_hop_penalty_rejects_correct_invalid_empty_and_covered(self) -> None:
+        config = TurnCreditConfig(
+            policy="final_hop_bridge",
+            missing_final_hop_turn_penalty=0.08,
+        )
+        candidates = [
+            _final_hop_candidate(
+                advantage=-0.5,
+                exact_match=True,
+                include_final_answer_turn=True,
+            ),
+            _final_hop_candidate(
+                advantage=-0.5,
+                valid_format=False,
+                include_final_answer_turn=True,
+            ),
+            _final_hop_candidate(
+                advantage=-0.5,
+                empty_first_observation=True,
+                empty_current_observation=True,
+                include_final_answer_turn=True,
+            ),
+            _final_hop_candidate(
+                advantage=-0.5,
+                second_query="Ronald Reagan death date",
+                current_observation="Ronald Reagan died on June 5, 2004.",
+                include_final_answer_turn=True,
+            ),
+            _final_hop_candidate(
+                advantage=-0.5,
+                second_query="Ronald Reagan biography",
+                current_observation="Ronald Reagan died on June 5, 2004.",
+                final_text="Answer: June 2004",
+                include_final_answer_turn=True,
+            ),
+        ]
+
+        build_training_datums(candidates, config)
+
+        for trajectory in candidates:
+            self.assertNotIn(
+                "missing_final_hop_attribute",
+                [turn.credit_label for turn in trajectory.turns],
+            )
+
+    def test_missing_final_hop_penalty_requires_explicit_attribute_query(self) -> None:
+        trajectory = _final_hop_candidate(
+            advantage=-0.5,
+            question="When did the president who succeeded Jimmy Carter die?",
+            second_query="Ronald Reagan biography",
+            current_observation="Ronald Reagan was president from 1981 to 1989.",
+            include_final_answer_turn=True,
+        )
+
+        build_training_datums(
+            [trajectory],
+            TurnCreditConfig(
+                policy="final_hop_bridge",
+                missing_final_hop_turn_penalty=0.08,
+            ),
+        )
+
+        self.assertEqual(
+            trajectory.turns[-1].credit_label,
+            "missing_final_hop_attribute",
+        )
+
+    def test_final_answer_guard_penalizes_max_search_and_invalid_format(self) -> None:
+        max_search = _final_hop_candidate(
+            advantage=-0.5,
+            valid_format=False,
+            final_text=_tool_call("Ronald Reagan death date"),
+            stop_reason="max_search_calls",
+        )
+        invalid_answer = _final_hop_candidate(
+            advantage=-0.5,
+            valid_format=False,
+            include_final_answer_turn=True,
+            final_text="June 2004",
+            stop_reason="invalid_format",
+        )
+
+        datums = build_training_datums(
+            [max_search, invalid_answer],
+            TurnCreditConfig(
+                policy="final_hop_bridge",
+                final_answer_guard_turn_penalty=0.06,
+            ),
+        )
+
+        self.assertAlmostEqual(
+            datums[0].datum.loss_fn_inputs["advantages"].to_numpy().tolist()[-1],
+            -0.56,
+        )
+        self.assertEqual(max_search.turns[-1].credit_label, "final_answer_guard")
+        self.assertEqual(invalid_answer.turns[-1].credit_label, "final_answer_guard")
+
+    def test_final_answer_guard_rejects_correct_and_unsearched_invalid(self) -> None:
+        correct = _final_hop_candidate(
+            advantage=0.5,
+            exact_match=True,
+            valid_format=True,
+            include_final_answer_turn=True,
+            final_text="Answer: June 5, 2004",
+        )
+        unsearched_invalid = Trajectory(
+            example=SearchExample("q-invalid", "Question?", ["A"], "test"),
+            group_index=0,
+            messages=[],
+            search_calls=0,
+            final_text="A",
+            reward=-0.1,
+            advantage=-0.5,
+            valid_format=False,
+            exact_match=False,
+            stop_reason="invalid_format",
+            events=[{"role": "assistant", "text": "A", "parsed_kind": "invalid"}],
+            turns=[AssistantTurn([1], [2], [0.1], "A")],
+        )
+
+        build_training_datums(
+            [correct, unsearched_invalid],
+            TurnCreditConfig(
+                policy="final_hop_bridge",
+                final_answer_guard_turn_penalty=0.06,
+            ),
+        )
+
+        self.assertFalse(any(turn.credit_label for turn in correct.turns))
+        self.assertFalse(any(turn.credit_label for turn in unsearched_invalid.turns))
 
     def test_weight_micro_batch_scales_advantages(self) -> None:
         trajectories = [
@@ -475,6 +879,175 @@ def _tool_call(query: str) -> str:
         "<tool_call><function=search><parameter=query>"
         f"{query}"
         "</parameter></function></tool_call>"
+    )
+
+
+def _turn_credit_candidate(
+    *,
+    advantage: float,
+    second_query: str = "Aelia Paetina father",
+    empty_previous_observation: bool = False,
+    empty_current_observation: bool = False,
+    valid_format: bool = True,
+    exact_match: bool = False,
+    search_calls: int = 2,
+    include_final_answer_turn: bool = False,
+    final_text: str = "Answer: Aelia Paetina",
+    question: str = "Who is the maternal grandfather of Claudia Antonia?",
+) -> Trajectory:
+    previous_items = (
+        []
+        if empty_previous_observation
+        else [
+            {
+                "title": "Aelia Paetina",
+                "content": "Claudia Antonia was the daughter of Aelia Paetina.",
+            }
+        ]
+    )
+    current_items = (
+        []
+        if empty_current_observation
+        else [
+            {
+                "title": "Sextus Aelius Catus",
+                "content": "Aelia Paetina was the daughter of Sextus Aelius Catus.",
+            }
+        ]
+    )
+    events = [
+        {
+            "role": "assistant",
+            "text": _tool_call("Claudia Antonia mother"),
+            "tool_call": {"name": "search", "query": "Claudia Antonia mother"},
+        },
+        {
+            "role": "tool",
+            "tool_name": "search",
+            "ok": True,
+            "items": previous_items,
+            "observation": "Claudia Antonia was the daughter of Aelia Paetina.",
+        },
+        {
+            "role": "assistant",
+            "text": _tool_call(second_query),
+            "tool_call": {"name": "search", "query": second_query},
+        },
+        {
+            "role": "tool",
+            "tool_name": "search",
+            "ok": True,
+            "items": current_items,
+            "observation": "Aelia Paetina was the daughter of Sextus Aelius Catus.",
+        },
+    ]
+    if search_calls == 1:
+        events = events[:2]
+    turns = [
+        AssistantTurn([1, 2], [3], [0.1], _tool_call("Claudia Antonia mother")),
+    ]
+    if search_calls != 1:
+        turns.append(
+            AssistantTurn([1, 2, 3, 4], [5], [0.2], _tool_call(second_query))
+        )
+    if include_final_answer_turn:
+        events.append({"role": "assistant", "text": final_text, "parsed_kind": "answer"})
+        turns.append(AssistantTurn([1, 2, 3, 4, 5], [6], [0.3], final_text))
+    return Trajectory(
+        example=SearchExample(
+            "q-turn-credit",
+            question,
+            ["Sextus Aelius Catus"],
+            "test",
+        ),
+        group_index=0,
+        messages=[],
+        search_calls=search_calls,
+        final_text=final_text,
+        reward=float(exact_match),
+        advantage=advantage,
+        valid_format=valid_format,
+        exact_match=exact_match,
+        stop_reason="answer",
+        events=events,
+        turns=turns,
+    )
+
+
+def _final_hop_candidate(
+    *,
+    advantage: float,
+    question: str = "When did the president who succeeded Jimmy Carter die?",
+    first_query: str = "president after Jimmy Carter",
+    first_observation: str = "Ronald Reagan succeeded Jimmy Carter.",
+    second_query: str = "Ronald Reagan biography",
+    current_observation: str = "Ronald Reagan was the 40th president.",
+    answers: list[str] | None = None,
+    empty_first_observation: bool = False,
+    empty_current_observation: bool = False,
+    valid_format: bool = True,
+    exact_match: bool = False,
+    include_final_answer_turn: bool = False,
+    final_text: str = "Answer: March 2004",
+    stop_reason: str = "answer",
+) -> Trajectory:
+    answers = answers or ["June 5, 2004"]
+    first_items = (
+        []
+        if empty_first_observation
+        else [{"title": "Ronald Reagan", "content": first_observation}]
+    )
+    current_items = (
+        []
+        if empty_current_observation
+        else [{"title": "Ronald Reagan", "content": current_observation}]
+    )
+    events = [
+        {
+            "role": "assistant",
+            "text": _tool_call(first_query),
+            "tool_call": {"name": "search", "query": first_query},
+        },
+        {
+            "role": "tool",
+            "tool_name": "search",
+            "ok": True,
+            "items": first_items,
+            "observation": first_observation if first_items else "",
+        },
+        {
+            "role": "assistant",
+            "text": _tool_call(second_query),
+            "tool_call": {"name": "search", "query": second_query},
+        },
+        {
+            "role": "tool",
+            "tool_name": "search",
+            "ok": True,
+            "items": current_items,
+            "observation": current_observation if current_items else "",
+        },
+    ]
+    turns = [
+        AssistantTurn([1, 2], [3], [0.1], _tool_call(first_query)),
+        AssistantTurn([1, 2, 3, 4], [5], [0.2], _tool_call(second_query)),
+    ]
+    if include_final_answer_turn:
+        events.append({"role": "assistant", "text": final_text, "parsed_kind": "answer"})
+        turns.append(AssistantTurn([1, 2, 3, 4, 5], [6], [0.3], final_text))
+    return Trajectory(
+        example=SearchExample("q-final-hop", question, answers, "test"),
+        group_index=0,
+        messages=[],
+        search_calls=2,
+        final_text=final_text,
+        reward=float(exact_match),
+        advantage=advantage,
+        valid_format=valid_format,
+        exact_match=exact_match,
+        stop_reason=stop_reason,
+        events=events,
+        turns=turns,
     )
 
 

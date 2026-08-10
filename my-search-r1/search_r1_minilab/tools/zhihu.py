@@ -20,6 +20,26 @@ from search_r1_minilab.tools.base import SearchItem, SearchResult, SearchStats
 
 
 SEARCH_ENDPOINT = "https://developer.zhihu.com/api/v1/content/global_search"
+MAX_ERROR_RESPONSE_CHARS = 4000
+
+
+class ZhihuRateLimitPayloadError(RuntimeError):
+    """Raised when a successful HTTP response contains a quota/rate-limit payload."""
+
+
+class ZhihuParsePayloadError(RuntimeError):
+    """Raised when an HTTP 200 payload cannot be normalized as search results."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None,
+        raw_response: str,
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.raw_response = raw_response
 
 
 def parse_zhihu_keys(raw_keys: str | None) -> list[str]:
@@ -31,12 +51,16 @@ def parse_zhihu_keys(raw_keys: str | None) -> list[str]:
 
 def zhihu_keys_from_env() -> list[str]:
     """Read supported Zhihu key environment variables."""
-    return parse_zhihu_keys(
-        os.getenv("ZHIHU_SEARCH_KEYS")
-        or os.getenv("ZHIHU_SEARCH_KEY")
-        or os.getenv("ZHIHU_ACCESS_SECRET")
-        or os.getenv("ZHIHU_API_KEY")
-    )
+    keys: list[str] = []
+    for variable in (
+        "ZHIHU_SEARCH_KEYS",
+        "ZHIHU_SEARCH_KEY",
+        "ZHIHU_ACCESS_SECRET",
+        "ZHIHU_API_KEY",
+        "ZHIHU_API_KEY2",
+    ):
+        keys.extend(parse_zhihu_keys(os.getenv(variable)))
+    return list(dict.fromkeys(keys))
 
 
 @dataclass
@@ -77,7 +101,8 @@ class ZhihuSearchBackend:
         secrets = zhihu_keys_from_env()
         if not secrets:
             raise ValueError(
-                "set ZHIHU_SEARCH_KEYS, ZHIHU_SEARCH_KEY, ZHIHU_ACCESS_SECRET, or ZHIHU_API_KEY"
+                "set ZHIHU_SEARCH_KEYS, ZHIHU_SEARCH_KEY, ZHIHU_ACCESS_SECRET, "
+                "ZHIHU_API_KEY, or ZHIHU_API_KEY2"
             )
         return cls(access_secrets=secrets, **kwargs)
 
@@ -105,8 +130,7 @@ class ZhihuSearchBackend:
                 return result
             except urllib.error.HTTPError as error:
                 if error.code == 429:
-                    self._rate_limited_secret_indices.add(secret_index)
-                    credential = self._next_credential()
+                    credential = self._mark_rate_limited_and_next(secret_index)
                     if credential is None:
                         result = self._error_result(
                             started,
@@ -167,6 +191,31 @@ class ZhihuSearchBackend:
                 )
                 self.stats.observe(result)
                 return result
+            except ZhihuRateLimitPayloadError:
+                credential = self._mark_rate_limited_and_next(secret_index)
+                if credential is None:
+                    result = self._error_result(
+                        started,
+                        error_type="rate_limited",
+                        message="all search keys are rate limited",
+                        status=429,
+                        query=query,
+                    )
+                    self.stats.observe(result)
+                    return result
+                secret_index, access_secret = credential
+                continue
+            except ZhihuParsePayloadError as error:
+                result = self._error_result(
+                    started,
+                    error_type="parse_error",
+                    message=str(error),
+                    query=query,
+                    status=error.status,
+                    metadata=self._parse_error_metadata(query, error),
+                )
+                self.stats.observe(result)
+                return result
             except (json.JSONDecodeError, KeyError, TypeError) as error:
                 result = self._error_result(
                     started,
@@ -187,6 +236,11 @@ class ZhihuSearchBackend:
                 return index, secrets[index]
         return None
 
+    def _mark_rate_limited_and_next(self, secret_index: int) -> tuple[int, str] | None:
+        """Mark the current credential as rate-limited and return a replacement."""
+        self._rate_limited_secret_indices.add(secret_index)
+        return self._next_credential()
+
     def _request(self, query: str, started: float, access_secret: str) -> SearchResult:
         """Perform one HTTP request and normalize the response."""
         params = urllib.parse.urlencode(
@@ -201,8 +255,26 @@ class ZhihuSearchBackend:
             },
         )
         with urllib.request.urlopen(request, timeout=self.timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-            items = [self._parse_item(item) for item in payload["Data"]["Items"]]
+            raw_response = response.read().decode("utf-8", errors="replace")
+            try:
+                payload = json.loads(raw_response)
+                if self._payload_indicates_rate_limit(payload):
+                    raise ZhihuRateLimitPayloadError()
+                data = payload["Data"]
+                if not isinstance(data, dict):
+                    raise TypeError("Data must be an object")
+                raw_items = data["Items"]
+                if not isinstance(raw_items, list):
+                    raise TypeError("Data.Items must be a list")
+                items = [self._parse_item(item) for item in raw_items]
+            except ZhihuRateLimitPayloadError:
+                raise
+            except (json.JSONDecodeError, KeyError, TypeError, AttributeError) as error:
+                raise ZhihuParsePayloadError(
+                    type(error).__name__,
+                    status=response.status,
+                    raw_response=raw_response,
+                ) from error
             return SearchResult(
                 ok=True,
                 items=items,
@@ -212,8 +284,41 @@ class ZhihuSearchBackend:
                 metadata={"query": query},
             )
 
+    def _payload_indicates_rate_limit(self, payload: Any) -> bool:
+        """Return true when a non-429 response is actually a quota/rate-limit error."""
+        if not isinstance(payload, dict):
+            return False
+        text_parts: list[str] = []
+        for key in ("Code", "code", "ErrorCode", "error_code", "Message", "message", "Error", "error"):
+            value = payload.get(key)
+            if value is not None:
+                text_parts.append(str(value))
+        data = payload.get("Data")
+        if isinstance(data, dict):
+            for key in ("Code", "code", "Message", "message", "Error", "error"):
+                value = data.get(key)
+                if value is not None:
+                    text_parts.append(str(value))
+        text = " ".join(text_parts).lower()
+        return any(
+            marker in text
+            for marker in (
+                "429",
+                "rate limit",
+                "rate_limit",
+                "too many",
+                "quota",
+                "限流",
+                "频率",
+                "次数",
+                "配额",
+            )
+        )
+
     def _parse_item(self, item: dict[str, Any]) -> SearchItem:
         """Keep the result fields needed by rollout and reports."""
+        if not isinstance(item, dict):
+            raise TypeError("Data.Items entries must be objects")
         source_parts = [str(item.get("ContentType") or "Zhihu")]
         if item.get("AuthorName"):
             source_parts.append(str(item["AuthorName"]))
@@ -231,8 +336,12 @@ class ZhihuSearchBackend:
         message: str,
         query: str,
         status: int | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> SearchResult:
         """Convert an exception to a sanitized search result."""
+        result_metadata = {"query": query}
+        if metadata:
+            result_metadata.update(metadata)
         return SearchResult(
             ok=False,
             items=[],
@@ -241,8 +350,23 @@ class ZhihuSearchBackend:
             status=status,
             error_type=error_type,
             error=message,
-            metadata={"query": query},
+            metadata=result_metadata,
         )
+
+    def _parse_error_metadata(
+        self,
+        query: str,
+        error: ZhihuParsePayloadError,
+    ) -> dict[str, Any]:
+        """Return bounded response details for parse-error investigation."""
+        excerpt = error.raw_response[:MAX_ERROR_RESPONSE_CHARS]
+        return {
+            "query": query,
+            "api_status": error.status,
+            "api_response_excerpt": excerpt,
+            "api_response_truncated": len(error.raw_response) > MAX_ERROR_RESPONSE_CHARS,
+            "parse_error_detail": str(error),
+        }
 
     def metrics(self) -> dict[str, float]:
         """Return cumulative Zhihu backend metrics."""

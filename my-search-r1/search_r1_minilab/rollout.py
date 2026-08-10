@@ -67,6 +67,10 @@ class AssistantTurn:
     completion_tokens: list[int]
     logprobs: list[float]
     text: str
+    effective_advantage: float | None = None
+    credit_label: str = ""
+    credit_bonus: float = 0.0
+    credit_query: str | None = None
 
 
 @dataclass
@@ -490,6 +494,7 @@ def trajectory_to_record(trajectory: Trajectory, *, run_type: str = "rollout") -
             "group_index": trajectory.group_index,
             "assistant_turns": len(trajectory.turns),
             "reward_components": trajectory.reward_components,
+            "turn_credits": _turn_credit_records(trajectory),
         },
     }
 
@@ -508,3 +513,20 @@ def _tool_event(result: SearchResult, observation: str) -> dict[str, Any]:
         "status": result.status,
         "metadata": result.metadata,
     }
+
+
+def _turn_credit_records(trajectory: Trajectory) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for index, turn in enumerate(trajectory.turns):
+        if not turn.credit_label:
+            continue
+        records.append(
+            {
+                "turn_index": index,
+                "label": turn.credit_label,
+                "query": turn.credit_query,
+                "bonus": turn.credit_bonus,
+                "effective_advantage": turn.effective_advantage,
+            }
+        )
+    return records

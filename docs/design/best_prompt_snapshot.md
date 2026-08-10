@@ -2,7 +2,7 @@
 
 记录时间：2026-07-22 13:10 CST
 
-本文记录当前 Search-R1 MiniLab 的最优 prompt base，供后续训练、ablation 和面试复盘引用。详细实验复盘见 `docs/interview/2026-07-22_prompt_search_budget_guard_eval.md`。
+本文记录当前 Search-R1 MiniLab 的最优 prompt base，供后续训练、ablation 和面试复盘引用。详细实验复盘见 `docs/interview/lesson/2026-07-22_prompt_search_budget_guard_eval.md`。
 
 ## Prompt Version
 

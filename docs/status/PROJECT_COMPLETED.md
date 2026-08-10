@@ -277,3 +277,8 @@
   - 相关路径：`00-loss-function/`、`01-grpo/`、`02-opd/`、`03-search-r1/`、`README.md`、`AGENTS.md`、`my-search-r1/README.md`、`docs/design/idea.md`、`docs/status/`
   - 验证方式：在干净 `main` 上创建 `Backup` 分支，确认 `Backup` 与删除前 `main` 同指向提交 `c58c6af`；在 `main` 执行目录删除并更新入口文档与状态文件；后续以 `git status`、`git ls-files`、`rg`、`git diff --check` 和 `my-search-r1` 测试验证。
   - 关键结果：四个教学目录由 `Backup` 分支保留，`main` 后续只承载 `my-search-r1/`、`docs/` 等项目自有实现和公开文档；过时的 `03-search-r1/train.py` 本地改动保护风险已从 TODO 移除。
+
+- 根目录 README 已改为 GitHub 展示版。
+  - 相关路径：`README.md`
+  - 验证方式：基于当前状态事实源重写项目定位、当前进展、方法迭代、结果快照、快速开始、仓库结构和边界声明；随后按用户反馈补充 base vs guard-fix 20-step 对比表；运行 `git diff --check`、README 链接目标检查和 `PYTHONPATH=my-search-r1 uv run python -m unittest discover -s my-search-r1/tests -v`。
+  - 关键结果：README 首屏已调整为 `Agentic Search RL MiniLab` 公开定位，突出搜索型 LLM Agent 的训练、评测与轨迹诊断能力；结果区直接展示 dev70 与 bridge150 上 prompt-only base 到 guard-fix 20-step 的 EM/correct/format 增量，并保留 3 条工具失败样本 retry 的评测口径边界。

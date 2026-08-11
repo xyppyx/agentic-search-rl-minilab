@@ -31,8 +31,16 @@ Search-R1 类搜索型 Agent 在真实工具环境下不仅要答对问题，还
 - 设计 offline diagnostics，标注 `possible_alias_match`、`answer_granularity_miss`、`missing_followup_query`、`bad_max_search_loop` 等失败类型。
 - 设计 turn-level credit：对有用搜索轮次赋予训练信号，而不是只在最终答案上给 reward。
 - 最终形成 `final_hop_bridge` / guard-fix 策略：奖励 evidence bridge search 和 final-hop attribute search，惩罚 early answer、missing final-hop attribute 和 final-answer/max-search no-answer。
+- 在 guard-fix 20-step 强 checkpoint 上实现 gated OPSD v2：只在 `credited_turns + positive_advantage` 的 assistant tokens 上加入小系数蒸馏辅助目标，避免全序列自蒸馏错误答案、工具 observation 或 early-answer 行为。
 
-当前主 checkpoint 是 `turn-credit-final-hop-guardfix-20step-20260806`，核心配置为：
+最终路线固定为：
+
+```text
+turn-credit-final-hop-guardfix-20step-20260806
+  -> guardfix20-resume-opsd-v2-5step-20260811
+```
+
+第一阶段 guard-fix 20-step 核心配置为：
 
 | 组件 | 值 |
 | --- | ---: |
@@ -45,6 +53,18 @@ Search-R1 类搜索型 Agent 在真实工具环境下不仅要答对问题，还
 | questions per batch | 2 |
 | group size | 4 |
 
+第二阶段 OPSD v2 5-step 核心配置为：
+
+| 组件 | 值 |
+| --- | ---: |
+| opsd coef | 0.01 |
+| opsd mask policy | `credited_turns` |
+| opsd positive policy | `positive_advantage` |
+| opsd min teacher logprob | -3.0 |
+| resume state | guard-fix 20-step final state |
+| reference / teacher | guard-fix 20-step final weights |
+| max steps | 5 |
+
 ## Result
 
 基础能力已经完成并验证：
@@ -52,17 +72,19 @@ Search-R1 类搜索型 Agent 在真实工具环境下不仅要答对问题，还
 - 工具层、trajectory 报告、rollout、train/eval CLI、offline diagnostics、reward sensitivity、turn-credit analysis 均已实现。
 - 训练阶段可生成可复盘 JSONL，并能区分模型错误、format 错误、搜索空结果、工具失败和重复 query。
 - `turn-credit-final-hop-guardfix-20step-20260806` 训练 20/20 step 完成，160 条训练 trajectory，训练阶段 tool failures 为 0。
+- `guardfix20-resume-opsd-v2-5step-20260811` 从 guard-fix final state 恢复训练并完成 dev70 与 bridge150 clean 评测，是当前最终路线。
 
 关键指标如下：
 
-| Eval | Baseline | 当前最好结果 | 结论 |
+| Eval | Baseline / 对照 | 当前最终路线 | 结论 |
 | --- | ---: | ---: | --- |
-| dev70 | evidence-v2 20-step EM 0.4429 | guard-fix 20-step retry EM 0.4571，format 0.9571 | EM 略优，但 format 低于 evidence-v2 的 1.0000 |
-| `bridge_eval_150` | prompt-only base EM 0.4750，74/150，format 0.7200 | guard-fix 20-step patched EM 0.5142，83/150，format 0.8267 | EM/correct/format 均优于 prompt base |
-| `bridge_eval_150` | evidence-v2 20-step EM 0.4583，81/150，format 0.9400 | guard-fix 20-step patched EM 0.5142，83/150，format 0.8267 | EM/correct 更高，但 format 更低 |
-| `alias_granularity_eval_80` | prompt-only base EM 0.4500，36/80，format 0.9250 | evidence-v2 20-step EM 0.4375，35/80，format 0.9625 | format 提升，但 EM/correct 未超过 base；guard-fix 20-step 尚未跑该集 |
+| dev70 | guard-fix 20-step retry EM 0.4571，32/70，format 0.9571 | OPSD v2 5-step clean EM 0.4857，34/70，format 0.9857 | dev70 EM/correct/format 同时提升 |
+| `bridge_eval_150` | prompt-only base EM 0.4750，74/150，format 0.7200 | OPSD v2 5-step clean EM 0.5242，87/150，format 0.9067 | clean correct 明显提升 |
+| `bridge_eval_150` | guard-fix 20-step patched EM 0.5142，83/150，format 0.8267 | OPSD v2 5-step clean EM 0.5242，87/150，format 0.9067 | 超过此前 patched 口径 |
+| `bridge_eval_150` | OPSD v2 20-step seed43 clean EM 0.5317，81/150，format 0.8133 | OPSD v2 5-step clean EM 0.5242，87/150，format 0.9067 | 20-step 宏 EM 略高但综合弱于 5-step |
+| `alias_granularity_eval_80` | prompt-only base EM 0.4500，36/80，format 0.9250 | evidence-v2 20-step EM 0.4375，35/80，format 0.9625 | format 提升，但 EM/correct 未超过 base；最终路线尚未跑该集 |
 
-需要如实说明：`bridge_eval_150` 的 guard-fix 20-step 最强结果采用 patched 协议，由 147 条 full run 记录和 3 条失败样本 retry 记录合成。它可作为当前最高 bridge EM/correct 证据，但不等同于一次独立全量 success rate 1.0 run。
+需要如实说明：`bridge_eval_150` 的 guard-fix 20-step 历史结果采用 patched 协议，由 147 条 full run 记录和 3 条失败样本 retry 记录合成，不能冒充独立全量 clean run。最终 OPSD v2 5-step bridge150 结果来自 clean chunks 合并，tool failures 为 0，是当前面试主口径。
 
 ## Takeaway
 
@@ -70,15 +92,16 @@ Search-R1 类搜索型 Agent 在真实工具环境下不仅要答对问题，还
 
 - 搜索型 Agent 的提升需要同时看 answer correctness、format、search efficiency 和 tool reliability。
 - 只做最终 reward 容易把必要 follow-up 搜索压掉；turn-level credit 能更直接地引导“该搜什么、何时停止”。
+- OPSD/OPD 类目标不能全序列套用；在搜索型 Agent 中必须用 positive gate 和 action-token mask，避免蒸馏工具 observation 或错误轨迹。
 - 外部工具不稳定会污染评测，必须把 tool failure 与模型策略错误分开记录。
-- 对面试表达而言，最稳妥的结论是：我构建了可观测 Search-R1 MiniLab，提出 final-hop turn-level reward shaping，在 dev70 和 bridge targeted eval 上取得 EM/correct 正向证据，同时定位到 format/max-search no-answer 仍是下一阶段瓶颈。
+- 对面试表达而言，最稳妥的结论是：我构建了可观测 Search-R1 MiniLab，提出 final-hop turn-level reward shaping，并在强 checkpoint 上用 gated OPSD v2 做保守 refine，最终在 dev70 与 bridge150 clean eval 上取得 EM/correct 正向证据，同时定位到 alias/granularity 与 format/max-search no-answer 仍是下一阶段瓶颈。
 
 ## 简历表述
 
 可放入简历的一版：
 
-> 构建 Robust Search-R1 MiniLab，基于 Qwen3.5-4B、PyTRIO GRPO 与 Zhihu Search backend 复现并改造搜索型 Agent RL 链路；实现统一搜索工具层、trajectory JSONL、offline diagnostics、reward sensitivity 与 turn-credit analysis。设计 evidence bridge / final-hop attribute turn-level reward shaping，在 dev70 上将 EM 提升至 45.7%；在 bridge targeted eval 上将 EM 从 prompt-only base 的 47.5% 提升到 51.4%（patched protocol），correct 从 74/150 提升到 83/150，并定位 format/max-search no-answer 为主要瓶颈。
+> 构建 Robust Search-R1 MiniLab，基于 Qwen3.5-4B、PyTRIO GRPO 与 Zhihu Search backend 改造搜索型 Agent RL 链路；实现统一搜索工具层、trajectory JSONL、offline diagnostics、reward sensitivity 与 turn-credit analysis。设计 evidence bridge / final-hop attribute turn-level reward shaping，并在 guard-fix 20-step checkpoint 上加入 `credited_turns + positive_advantage` gated OPSD v2；最终 dev70 clean EM 48.6%（34/70），bridge150 clean EM 52.4%（87/150），相对 prompt-only bridge base 的 74/150 correct 提升到 87/150。
 
 更保守的一版：
 
-> 搭建 Search-R1 Agentic RL 实验框架，围绕真实搜索工具不稳定、多跳 follow-up 和格式收束问题设计可观测训练与评测链路；通过 turn-level final-hop reward shaping 在 dev70 与 bridge targeted eval 上取得 EM/correct 正向证据，并完成 gained/lost case review 与失败类型诊断。
+> 搭建 Search-R1 Agentic RL 实验框架，围绕真实搜索工具不稳定、多跳 follow-up 和格式收束问题设计可观测训练与评测链路；通过 final-hop turn-level credit 与 gated OPSD v2 在 dev70 与 bridge150 clean eval 上取得 EM/correct 正向证据，并完成 gained/lost case review 与失败类型诊断。

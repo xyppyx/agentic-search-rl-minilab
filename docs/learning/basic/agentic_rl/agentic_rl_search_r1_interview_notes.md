@@ -113,8 +113,18 @@ Agentic RL 中不能把这些都当作模型错误，否则 reward 会被污染�
 1. 行为 penalty：惩罚重复 query、空结果、max-search 不答。
 2. Prompt/rollout guard：提示模型先做 bridge search，再做 final-hop search，最终短答案。
 3. Turn-level credit：奖励 evidence bridge search 和 final-hop attribute search，惩罚 early answer 与 final-answer guard 问题。
+4. Gated OPSD v2：在 guard-fix 20-step checkpoint 上，只对 `credited_turns + positive_advantage` 的 assistant tokens 加小系数蒸馏辅助目标。
 
 主要经验：单纯惩罚搜索成本容易让模型少搜和早答；对搜索型 Agent，更有效的信号通常是“奖励必要搜索”和“惩罚缺失关键 follow-up”。
+
+最终路线不是从 base 直接做自蒸馏，而是：
+
+```text
+guard-fix 20-step 学搜索策略
+  -> OPSD v2 5-step 做 gated conservative refinement
+```
+
+这样既保留 turn-level credit 主线，又避免 full-sequence OPSD 蒸馏错误答案、工具 observation 或 early-answer 行为。
 
 ## 多跳问题与 Final-Hop
 
@@ -175,7 +185,7 @@ offline diagnostics 是在不重新训练、不重新调用模型的情况下，
 - bad max-search loop count。
 - gained/lost case review。
 
-本项目对 `bridge_eval_150` 的结果会特别标注 patched protocol，是因为它由 full run 加失败样本 retry 合成，不等同一次独立全量 success rate 1.0 run。面试时主动说明这个边界，可信度更高。
+本项目早期 guard-fix 20-step 的 `bridge_eval_150` 最强结果会特别标注 patched protocol，因为它由 full run 加失败样本 retry 合成，不等同一次独立全量 success rate 1.0 run。最终路线 `guardfix20-resume-opsd-v2-5step-20260811` 的 bridge150 结果来自 clean chunks 合并，tool failures 为 0，可以作为当前 clean 口径主结果。
 
 ## 项目可讲的技术贡献
 
@@ -184,7 +194,17 @@ offline diagnostics 是在不重新训练、不重新调用模型的情况下，
 1. 工具层：统一 mock/local BM25/Zhihu/failure injection，隔离真实搜索 API 不稳定性。
 2. 可观测性：保存 trajectory JSONL 和 Markdown report，支持 bucket、gained/lost、offline diagnostics。
 3. 训练链路：迁移 PyTRIO GRPO train/eval，加入 std advantage、ratio clip 和 KL-style reference 约束。
-4. 算法改进：从行为 penalty 迭代到 final-hop turn-level reward shaping，在 dev70 和 bridge targeted eval 上取得 EM/correct 正向证据，同时定位 format/max-search no-answer 为剩余瓶颈。
+4. 算法改进：从行为 penalty 迭代到 final-hop turn-level reward shaping，解决多跳题 bridge/final-hop credit assignment。
+5. OPSD v2：在 guard-fix 强 checkpoint 上加入 `credited_turns + positive_advantage` gated distillation，最终固定为 guard-fix 20-step + OPSD v2 5-step。
+
+当前可引用结果：
+
+| Eval | 最终路线结果 | 对照口径 |
+| --- | ---: | --- |
+| dev70 | EM 0.4857，correct 34/70，format 0.9857，avg search 1.7286 | 高于 guard-fix 20-step retry EM 0.4571 |
+| bridge150 | clean EM 0.5242，correct 87/150，format 0.9067，avg search 3.1400 | 高于 prompt-only base correct 74/150 和 guard-fix patched correct 83/150 |
+
+20-step OPSD v2 seed43 在 bridge150 上 EM macro 为 0.5317，但 correct 81/150、format 0.8133、avg search 3.2533，综合弱于 5-step，因此不替代最终候选。
 
 ## 面试常见追问
 
@@ -202,8 +222,12 @@ offline diagnostics 是在不重新训练、不重新调用模型的情况下，
 
 **为什么 patched bridge 结果不能直接当正式论文式结果？**
 
-因为它不是一次独立全量 run，而是 full run 中工具失败样本单独 retry 后合成。它能说明当前策略在去除外部工具失败污染后有潜在正向效果，但严格结论仍需要 success rate 1.0 的独立全量重跑。
+因为它不是一次独立全量 run，而是 full run 中工具失败样本单独 retry 后合成。它能说明 guard-fix 阶段在去除外部工具失败污染后有潜在正向效果，但不能冒充 clean full eval。最终 OPSD v2 5-step 的 bridge150 采用分片 clean 协议合并，tool failures 为 0。
+
+**OPSD v2 为什么不是简单自己模仿自己？**
+
+因为它没有蒸馏全序列，也没有对所有样本启用。项目只在被 turn-level credit 命中的 assistant turn 上计算 OPSD loss，并要求轨迹 advantage 为正；GRPO 仍是主 loss，OPSD 只是 `0.01` 系数的辅助项。
 
 **项目下一步最值得做什么？**
 
-不是继续盲目加训练步数，而是解决 format/max-search no-answer 和 final-hop follow-up 的权衡：在保持 EM/correct 的同时，提高 bridge eval 的 format，并做独立全量 success rate 1.0 重跑或多 seed 稳定性验证。
+不是继续盲目加训练步数，而是补最终路线的 alias80 验证和 case review：检查别名/粒度鲁棒性、format/max-search no-answer，以及 final-hop follow-up 是否在更多题型上稳定。

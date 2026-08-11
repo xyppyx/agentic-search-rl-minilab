@@ -151,6 +151,29 @@ rollout 状态机会：
 - missing-final-hop detector 收紧 date 类判断，避免 observation 中任意年份误判为属性已覆盖。
 - final-answer guard 主要覆盖 `max_search_calls` 且没有合法 `Answer:` 的最后一轮。
 
+### Gated OPSD v2
+
+OPSD v2 是在 GRPO 主 loss 之外加入的辅助 distillation loss。它默认关闭，只有设置 `--opsd-coef > 0` 时启用。
+
+核心设计：
+
+| 配置 | 当前最终路线值 | 作用 |
+| --- | --- | --- |
+| `--opsd-coef` | `0.01` | 控制 OPSD 辅助 loss 权重 |
+| `--opsd-mask-policy` | `credited_turns` | 只蒸馏被 turn-credit 命中的 assistant turn |
+| `--opsd-positive-policy` | `positive_advantage` | 只对组内正向 advantage 样本启用 |
+| `--opsd-min-teacher-logprob` | `-3.0` | 过滤 teacher 低置信 token |
+| `--reference-model-path` | guard-fix final sampler weights | 同时用于 KL/reference 和 OPSD teacher logprob |
+
+实现上，`rollout.py` 负责保存 assistant turn、target token、old logprob、turn credit metadata；`training.py` 构建 `TrainingDatum` 时根据 turn mask 与 advantage gate 生成 OPSD mask，并复用 reference/teacher logprob 对齐逻辑。loss 中 GRPO 仍是主项，OPSD loss 只作用在筛选后的 assistant action tokens，不覆盖 tool observation。
+
+面试可讲的工程点：
+
+- v1 same-context OPSD 链路跑通但未超过 turn-credit 主线，说明 naive 或弱 gate 自蒸馏收益有限。
+- v2 加入 `positive_advantage` 后，避免默认蒸馏 wrong-valid final answer。
+- 最终不是从 Qwen base 做 OPSD，而是从 guard-fix 20-step final state 恢复；teacher/reference 也是 guard-fix final weights，因此是强 checkpoint 上的短程 conservative refinement。
+- 20-step seed43 对照表明继续扩步不一定更好，最终选择 5-step 是基于 dev70 与 bridge150 综合指标。
+
 ## Diagnostics
 
 trajectory report 会输出：
@@ -179,13 +202,14 @@ turn-credit analysis 会统计：
 
 ## 当前最优 Checkpoint
 
-当前主 checkpoint：
+当前最终路线：
 
 ```text
 turn-credit-final-hop-guardfix-20step-20260806
+  -> guardfix20-resume-opsd-v2-5step-20260811
 ```
 
-训练配置：
+第一阶段 guard-fix 20-step 训练配置：
 
 | 参数 | 值 |
 | --- | ---: |
@@ -209,37 +233,46 @@ turn-credit-final-hop-guardfix-20step-20260806
 | `missing_final_hop_attribute` | 7 |
 | `final_answer_guard` | 16 |
 
+第二阶段 OPSD v2 5-step 公开训练参数：
+
+| 参数 | 值 |
+| --- | ---: |
+| max steps | 5 |
+| group size | 4 |
+| questions per batch | 2 |
+| turn-credit policy | `final_hop_bridge` |
+| opsd coef | 0.01 |
+| opsd mask policy | `credited_turns` |
+| opsd positive policy | `positive_advantage` |
+| opsd min teacher logprob | -3.0 |
+| resume state | guard-fix 20-step final state |
+| reference / teacher | guard-fix 20-step final sampler weights |
+
 ## 评测结果
 
 ### Dev70
 
-有效 retry：
+最终路线 clean eval：
 
 | 指标 | 值 |
 | --- | ---: |
 | Zhihu success rate | 1.0000 |
-| EM macro | 0.4571 |
-| correct | 32/70 |
-| format | 0.9571 |
-| avg search | 1.9000 |
-| missing follow-up | 0 |
-| answer granularity miss | 0 |
-| bad max-search loop | 2 |
+| EM macro | 0.4857 |
+| correct | 34/70 |
+| format | 0.9857 |
+| avg search | 1.7286 |
 
 ### Bridge Eval 150
 
-完整 run 未过工具门槛，Zhihu success rate 0.9896。patched 版本替换 3 条工具失败样本后：
+最终路线通过分片 clean 协议完成 150 条合并评测，tool failures 为 0：
 
 | 指标 | 值 |
 | --- | ---: |
 | tool failures | 0 |
-| EM macro | 0.5142 |
-| correct | 83/150 |
-| format | 0.8267 |
-| avg search | 3.2000 |
-| missing follow-up | 3 |
-| possible alias match | 4 |
-| bad max-search loop | 8 |
+| EM macro | 0.5242 |
+| correct | 87/150 |
+| format | 0.9067 |
+| avg search | 3.1400 |
 
 对比：
 
@@ -249,8 +282,10 @@ turn-credit-final-hop-guardfix-20step-20260806
 | evidence-v2 20-step | 0.4583 | 81/150 | 0.9400 | 3.0933 |
 | guard-fix 5-step patched | 0.4842 | 80/150 | 0.7933 | 3.2200 |
 | guard-fix 20-step patched | 0.5142 | 83/150 | 0.8267 | 3.2000 |
+| guardfix20 + OPSD v2 5-step clean | 0.5242 | 87/150 | 0.9067 | 3.1400 |
+| guardfix20 + OPSD v2 20-step seed43 clean | 0.5317 | 81/150 | 0.8133 | 3.2533 |
 
-结论：guard-fix 20-step patched 是当前 bridge EM/correct 最强，但 format 不如 evidence-v2 20-step。
+结论：OPSD v2 5-step 是当前 bridge clean correct/format/search 综合最强路线。20-step seed43 的 EM macro 略高，但 correct 更低、format 明显退化、平均搜索更高，因此不替代最终候选。
 
 ### Alias / Granularity Eval 80
 
@@ -261,7 +296,7 @@ turn-credit-final-hop-guardfix-20step-20260806
 | prompt-only base | 0.4500 | 36/80 | 0.9250 | 1.6500 |
 | evidence-v2 20-step | 0.4375 | 35/80 | 0.9625 | 1.5125 |
 
-结论：alias/granularity 上尚未取得 EM/correct 超过 base 的结果；guard-fix 20-step 尚未在该 eval 集上验证。
+结论：alias/granularity 上尚未取得 EM/correct 超过 base 的结果；最终路线尚未在该 eval 集上验证。
 
 ## 工程注意点
 
@@ -269,4 +304,4 @@ turn-credit-final-hop-guardfix-20step-20260806
 - patched 协议必须写清楚组成，不能冒充独立全量 run。
 - 不公开 PyTRIO sampler weights URI、SwanLab 私有链接、真实 API key 或远程凭据。
 - 评测报告中必须区分 tool failure、empty observation、format error 和 exact-match wrong。
-- 当前下一步不是盲目扩步数，而是围绕 format/max-search no-answer 做更细的 guard 或独立全量 rerun。
+- 当前下一步不是盲目扩步数，而是补最终路线 alias80 评测和 case review，检查 format/max-search no-answer、别名/粒度鲁棒性与 final-hop follow-up 稳定性。

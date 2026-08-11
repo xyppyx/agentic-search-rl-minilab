@@ -32,6 +32,7 @@
 - Gated OPSD v2 已完成实现与 local PyTRIO smoke：新增 `--opsd-positive-policy`，默认 `credited_turns + positive_advantage`，避免默认蒸馏 wrong-valid final answer；local nonzero-mask smoke 验证 OPSD teacher logprobs、custom backward 和 optimizer 路径可用。
 - `eval_pytrio.py` 已增加 `--offset` 数据选择参数，用于长评测被外部 sampling session 中断时做分片恢复；默认 `--offset 0` 保持原评测行为。
 - 最终路线公开训练参数已冻结：guard-fix 20-step 使用 `final_hop_bridge`、`evidence_search_turn_bonus=0.05`、`final_hop_search_turn_bonus=0.10`、`early_answer_turn_penalty=0.05`、`missing_final_hop_turn_penalty=0.08`、`final_answer_guard_turn_penalty=0.06`；OPSD v2 5-step 在其 final state 上恢复，使用 `opsd_coef=0.01`、`opsd_mask_policy=credited_turns`、`opsd_positive_policy=positive_advantage`、`opsd_min_teacher_logprob=-3.0`。
+- 公开展示材料已按最终路线更新：根 `README.md`、`docs/interview/one_page_project_pitch.md`、`docs/interview/interview_qa_quick_reference.md`、`docs/learning/project/project_experience_star.md` 和 `docs/learning/project/technical_implementation_details.md` 均切换到 guard-fix 20-step + OPSD v2 5-step 口径；新增 `docs/learning/basic/rl/opd_opsd_interview_notes.md` 解释 OPD/OPSD、gated objective、mask 和 5-step 选择理由。
 - 训练默认稳定化配置已切换为 standardized advantage、advantage clip 2.0、KL-style reference drift penalty 0.01、policy ratio clip 0.2、learning rate 1e-5；reward behavior penalty 默认仍关闭。
 - Reward shaping 已验证过多轮路线：简单 duplicate/empty/max-search penalty 能降低部分坏行为但可能损伤必要 follow-up；prompt/rollout 约束和 turn-level credit 更适合当前 Search-R1 MiniLab。
 - Zhihu backend 的 parse/url/rate-limit 等工具异常已进入 trajectory 与报告，项目评测规则要求模型策略问题和外部工具失败分开记录。

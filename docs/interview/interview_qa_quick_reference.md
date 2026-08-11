@@ -4,7 +4,7 @@
 
 ## 项目一句话
 
-我做的是 Robust Search-R1 MiniLab：基于 Qwen3.5-4B、PyTRIO GRPO 和真实 Zhihu Search backend，搭建一个可观测的搜索型 Agentic RL 实验框架，并围绕多跳搜索中的 follow-up、final-hop 和工具不稳定问题做 reward shaping 改进。
+我做的是 Robust Search-R1 MiniLab：基于 Qwen3.5-4B、PyTRIO GRPO 和真实 Zhihu Search backend，搭建一个可观测的搜索型 Agentic RL 实验框架。最终路线固定为 guard-fix 20step + OPSD v2 5step，核心是先通过 final-hop turn-level credit 学搜索策略，再用 gated on-policy self-distillation 做保守微调。
 
 ## 为什么做这个项目
 
@@ -29,7 +29,7 @@ ReAct 更偏 prompt 诱导，让模型按 reasoning/action 格式调用工具，
 
 ## 核心算法改进是什么
 
-核心改进是从最终答案 reward 逐步走到 turn-level credit。早期我尝试 duplicate、empty、max-search no-answer 等 penalty，发现它们能减少无效搜索，但容易压掉必要 follow-up，导致 EM 下降。后面我改成奖励有用搜索：比如 evidence bridge search 和 final-hop attribute search，同时惩罚 early answer、missing final-hop attribute 和 final-answer/max-search no-answer。
+核心改进分两段。第一段是从最终答案 reward 逐步走到 turn-level credit：奖励 evidence bridge search 和 final-hop attribute search，同时惩罚 early answer、missing final-hop attribute 和 final-answer/max-search no-answer。第二段是在最强 guard-fix checkpoint 上加入 OPSD v2，但不是全序列自蒸馏，而是只在 positive advantage 且被 turn-credit 命中的 assistant turn 上做小系数 distillation。
 
 ## 为什么需要 turn-level credit
 
@@ -62,17 +62,42 @@ ReAct 更偏 prompt 诱导，让模型按 reasoning/action 格式调用工具，
 
 ## 当前最好结果怎么讲
 
-dev70 上，guard-fix 20-step retry 的有效评测是 EM 0.4571、correct 32/70、format 0.9571、平均搜索 1.9000，Zhihu success rate 1.0。它相对 evidence-v2 20-step 的 EM 0.4429 略高，但 format 低于 evidence-v2 的 1.0000。
+最终路线是 `turn-credit-final-hop-guardfix-20step-20260806 -> guardfix20-resume-opsd-v2-5step-20260811`。dev70 clean 结果是 EM 0.4857、correct 34/70、format 0.9857、平均搜索 1.7286，tool success rate 1.0。
 
-bridge_eval_150 上，guard-fix 20-step patched 的结果是 EM 0.5142、correct 83/150、format 0.8267、平均搜索 3.2000。相对 prompt-only base 的 EM 0.4750、correct 74/150、format 0.7200 有提升；相对 evidence-v2 20-step，它 EM/correct 更高，但 format 低于 0.9400。
+bridge_eval_150 上，最终路线 clean chunk 合并结果是 EM 0.5242、correct 87/150、format 0.9067、平均搜索 3.1400，tool failures 0。相对 prompt-only base 的 EM 0.4750、correct 74/150、format 0.7200 有明显提升；相对 guard-fix 20step patched 的 0.5142/83/150 也更强。
+
+## 多种尝试如何对比
+
+可以按实验路线讲：
+
+| 阶段 | 代表结果 | 经验 |
+| --- | --- | --- |
+| prompt-only guard | dev70 EM 0.4143 | prompt 能改善格式和搜索预算，但策略学习有限 |
+| behavior penalty | 部分减少重复/空搜 | 容易压掉必要 follow-up |
+| evidence-v2 20step | dev70 format 1.0000，bridge format 0.9400 | format 强，但 EM/correct 不最高 |
+| final-hop guard-fix 20step | dev70 EM 0.4571，bridge patched 0.5142 | final-hop credit 提升 EM/correct |
+| guardfix20 + OPSD v2 5step | dev70 0.4857，bridge clean 0.5242 | 当前最终路线 |
+| OPSD v2 20step seed43 | bridge EM 0.5317，但 correct 81/150、format 0.8133 | 宏平均高但综合不如 5step |
+
+结论不要说“20step 更差”这么简单，而是说：20step seed43 提高了部分宏平均，但损伤了 bridge correct、format 和搜索成本，综合目标下不替代 5step。
 
 ## patched protocol 是什么
 
-patched protocol 是为处理真实搜索工具失败做的评测补救。guard-fix 20-step 的 bridge full run 里有 3 条样本出现 5 个 `url_error`，Zhihu success rate 0.9896，不能作为正式全量成功 run。我单独重跑这 3 条失败样本，确认 success rate 1.0 后，用 retry 记录替换 full run 里的失败记录，得到 patched bridge150。
+patched protocol 是为处理真实搜索工具失败做的评测补救。guard-fix 20-step 的 bridge full run 里有 3 条样本出现 5 个 `url_error`，Zhihu success rate 0.9896，不能作为正式全量成功 run。我单独重跑这 3 条失败样本，确认 success rate 1.0 后，用 retry 记录替换 full run 里的失败记录，得到 patched bridge150。最终 OPSD v2 5step 的 bridge150 已经是 clean chunks 合并，不再依赖 patched 口径。
 
 ## patched 结果能不能写简历
 
-可以谨慎写，但必须标注边界：它是 147 条 full run 记录加 3 条失败样本 retry 合成，不等同一次独立全量 success rate 1.0 run。它能说明去除外部工具失败污染后，策略在 bridge EM/correct 上有正向证据；如果是论文式严格结论，还需要等 Zhihu 稳定后重跑一次独立全量 success rate 1.0 的 bridge150。
+现在简历优先写最终路线的 clean bridge150：EM 52.4%、correct 87/150、format 90.7%、tool failures 0。patched guard-fix 20step 只作为历史对照，必要时说明它是 147 条 full run 记录加 3 条失败样本 retry 合成，不等同一次独立全量 success rate 1.0 run。
+
+## OPSD 是什么，为什么不是自己模仿自己这么简单
+
+OPSD 可以理解为在 on-policy RL 过程中加入一个辅助 distillation objective，让 student 不只依赖稀疏 reward，也能从 teacher/reference 的 token logprob 获得更密集信号。但 naive OPSD 确实可能退化成“自己模仿自己”，甚至蒸馏错误答案。
+
+本项目的 v2 做了三个约束：teacher 使用 guard-fix final weights；mask 只覆盖 credited turns，不蒸馏 tool observation；positive policy 只选择 positive advantage 的 turn。这样它不是全序列自复制，而是在强 checkpoint 上保留有正向证据的搜索/回答行为。
+
+## 为什么最终选 5step，不会被质疑太少吗
+
+我的回答是：5step 不是从 base 开始训练，而是在 guard-fix 20step 的强 checkpoint 上做 conservative refinement。OPSD gate 本身很稀疏，20step 不等于 20 次强有效信号。实际方差对照里，20step seed43 的 bridge EM macro 略高，但 correct 从 87/150 降到 81/150，format 从 0.9067 降到 0.8133，平均搜索也更高。所以选 5step 是基于综合评测，而不是为了节省训练。
 
 ## 为什么强调工具成功率
 
@@ -92,11 +117,12 @@ local BM25 不代表真实搜索能力，它在完整 dev 上空结果率很高�
 
 ## 如果老师问创新点
 
-我会讲成三点：
+我会讲成四点：
 
 1. 工程上，把 Search-R1 改造成可复现、可观测的 MiniLab，支持多 backend、失败注入和 trajectory 报告。
 2. 方法上，从行为 penalty 迭代到 final-hop turn-level credit，针对多跳 follow-up 和 early answer 做定向 reward。
-3. 评测上，建立 dev70、bridge150、alias80 和 gained/lost/diagnostics，明确区分模型策略失败和工具失败。
+3. 训练上，在强 guard-fix checkpoint 上加入 gated OPSD v2，避免 naive self-distillation，同时用 5step/20step 对照验证步数不是越多越好。
+4. 评测上，建立 dev70、bridge150、alias80 和 gained/lost/diagnostics，明确区分模型策略失败和工具失败。
 
 ## 如果老师质疑指标不够高
 
@@ -104,7 +130,7 @@ local BM25 不代表真实搜索能力，它在完整 dev 上空结果率很高�
 
 ## 如果老师问下一步
 
-下一步不是盲目扩训练步数，而是两件事：第一，等待 Zhihu 稳定后重跑 guard-fix 20-step 的独立全量 bridge150，要求 success rate 1.0；第二，针对 format/max-search no-answer 做更细的 guard，让 bridge EM/correct 提升的同时把 format 拉近 evidence-v2 20-step 的 0.9400。
+主路线已经固定，不再盲目扩训练步数。下一步是补最终 checkpoint 的 alias80，确认 alias/granularity 不被牺牲；同时做 gained/lost case review，把为什么 5step 提升 dev70/bridge、为什么 20step 损伤 format 讲清楚。
 
 ## 30 秒收尾
 

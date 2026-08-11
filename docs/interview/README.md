@@ -12,6 +12,7 @@
 - [../learning/project/project_experience_star.md](../learning/project/project_experience_star.md)：按 STAR(T) 法则组织的项目背景、任务、行动、指标和简历表述。
 - [../learning/project/technical_implementation_details.md](../learning/project/technical_implementation_details.md)：项目技术实现、reward 设计、训练评测链路和关键指标。
 - [../learning/basic/rl/reinforcement_learning_interview_notes.md](../learning/basic/rl/reinforcement_learning_interview_notes.md)：RL、GRPO、reward shaping 和训练稳定性基础。
+- [../learning/basic/rl/opd_opsd_interview_notes.md](../learning/basic/rl/opd_opsd_interview_notes.md)：OPD、OPSD、自蒸馏、门控 mask 和本项目最终 OPSD v2 路线。
 - [../learning/basic/agentic_rl/agentic_rl_search_r1_interview_notes.md](../learning/basic/agentic_rl/agentic_rl_search_r1_interview_notes.md)：Agentic RL、Search-R1、工具调用和评测口径。
 
 历史实验复盘与可复用经验归档在 `lesson/` 子目录。

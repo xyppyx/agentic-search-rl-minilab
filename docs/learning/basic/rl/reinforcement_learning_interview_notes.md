@@ -133,6 +133,22 @@ reward' = reward - beta * KL(pi_theta || pi_ref)
 
 本项目默认使用 `kl_coef=0.01` 的 KL-style reference 约束。面试时要讲清楚：这里的 KL 不是为了提升搜索能力本身，而是为了稳定训练，避免小样本 reward 把模型推到格式退化或语言退化区域。
 
+## OPD / OPSD 辅助目标
+
+OPD 可以理解为在 RL 之外加入 policy distillation，让当前 policy 在部分 token 上贴近 teacher policy。OPSD 是 on-policy self-distillation：teacher 通常来自当前或近期 checkpoint，因此成本低，但如果不加筛选，容易变成“自己模仿自己的错误”。
+
+本项目最终使用的是 gated OPSD v2，而不是 naive full-sequence self-distillation：
+
+- 主目标仍是 GRPO 和 turn-level credit。
+- OPSD 只用 `opsd_coef=0.01` 的小系数辅助。
+- mask 使用 `credited_turns`，只覆盖被 final-hop/bridge credit 命中的 assistant turn。
+- gate 使用 `positive_advantage`，只在组内表现为正向的轨迹上启用。
+- teacher/reference 使用 guard-fix 20-step final weights，而不是 Qwen base。
+
+面试回答要点：KL 是“别偏太远”的稳定约束；OPSD 是“把筛选后的好动作 token 再压实一点”的局部辅助信号。没有 gate 的 OPSD 容易蒸馏 wrong answer、tool observation 或 early-answer 行为，所以搜索型 Agent 必须显式设计 mask 和 positive policy。
+
+更完整的 OPD/OPSD 追问准备见 `docs/learning/basic/rl/opd_opsd_interview_notes.md`。
+
 ## Reward Shaping
 
 reward shaping 是在最终任务 reward 之外加入中间奖励或惩罚，引导更好的学习路径。

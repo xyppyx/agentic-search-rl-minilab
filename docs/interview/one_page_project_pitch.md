@@ -6,7 +6,7 @@
 
 我做的是 Robust Search-R1 MiniLab，一个面向搜索型 Agentic RL 的个人 POC。项目基于 Qwen3.5-4B、PyTRIO GRPO 和真实 Zhihu Search backend，目标不是单纯跑通 Search-R1，而是把搜索型 Agent 的训练和评测做得可观测、可诊断、可复盘。
 
-我实现了统一搜索工具层、trajectory JSONL、Markdown report、offline diagnostics、reward sensitivity 和 turn-level credit。算法上，我从简单行为 penalty 迭代到 final-hop turn-level reward shaping，针对多跳问题里的 bridge search、final-hop attribute search、early answer 和 max-search no-answer 做定向信号。最终在 dev70 和 bridge targeted eval 上取得 EM/correct 正向证据，同时也如实保留 patched protocol 和 format 仍待提升的边界。
+我实现了统一搜索工具层、trajectory JSONL、Markdown report、offline diagnostics、reward sensitivity、turn-level credit 和 gated OPSD v2。算法上，我从简单行为 penalty 迭代到 final-hop turn-level reward shaping，再在最强 guard-fix checkpoint 上做 5-step OPSD v2 保守微调。最终路线固定为 guard-fix 20step + OPSD v2 5step：dev70 clean EM 0.4857、correct 34/70；bridge150 clean EM 0.5242、correct 87/150、format 0.9067。
 
 ## 2 分钟完整版
 
@@ -19,30 +19,30 @@
 - 第三是训练层，迁移 PyTRIO GRPO train/eval 链路，并加入 advantage standardization、ratio clip 和 KL-style reference 约束，提升小预算训练稳定性。
 - 第四是分析层，实现 offline diagnostics、reward sensitivity、turn-credit analysis 和 gained/lost review，用来解释 checkpoint 行为变化。
 
-算法上，我的主要经验是：简单 penalty 不够稳。比如惩罚重复搜索、空结果或搜满不答，确实能减少无效搜索，但也可能让模型少做必要 follow-up，导致 EM 下降。后来我把方向改成 turn-level credit：奖励 evidence bridge search 和 final-hop attribute search，惩罚 early answer、missing final-hop attribute，以及搜过后仍然 max-search no-answer 或格式非法。
+算法上，我的主要经验是：简单 penalty 不够稳。比如惩罚重复搜索、空结果或搜满不答，确实能减少无效搜索，但也可能让模型少做必要 follow-up，导致 EM 下降。后来我把方向改成 turn-level credit：奖励 evidence bridge search 和 final-hop attribute search，惩罚 early answer、missing final-hop attribute，以及搜过后仍然 max-search no-answer 或格式非法。最后我尝试 OPD/OPSD 思路，但没有做 naive 全序列自蒸馏，而是做 gated OPSD v2：只在正向 advantage 且被 turn-credit 命中的 assistant turn 上启用辅助 distillation loss。
 
-最终结果上，dev70 的 guard-fix 20-step retry 有效评测达到 EM 0.4571、correct 32/70、format 0.9571、平均搜索 1.9000，Zhihu success rate 1.0。bridge_eval_150 上，guard-fix 20-step patched 达到 EM 0.5142、correct 83/150、format 0.8267，相对 prompt-only base 的 EM 0.4750、correct 74/150、format 0.7200 有提升。
+最终路线是两阶段：第一阶段 `turn-credit-final-hop-guardfix-20step-20260806` 学到更好的 bridge/final-hop 搜索策略；第二阶段 `guardfix20-resume-opsd-v2-5step-20260811` 从它的 final state 恢复，用 guardfix final weights 作为 KL/reference 和 OPSD teacher 做 5-step 保守微调。最终 dev70 clean EM 0.4857、correct 34/70、format 0.9857、平均搜索 1.7286；bridge150 10 个 clean chunks 合并后 EM 0.5242、correct 87/150、format 0.9067、平均搜索 3.1400。
 
-但这里我会明确说明边界：bridge 的最强结果是 patched protocol，由 147 条 full run 记录加 3 条工具失败样本 retry 合成，不等同一次独立全量 success rate 1.0 run。它说明在去除外部工具失败污染后，策略有正向证据；如果追求严格论文式结论，还需要等 Zhihu 稳定后重跑独立全量 bridge150。另外，guard-fix 20-step 的 bridge format 0.8267 仍低于 evidence-v2 20-step 的 0.9400，所以后续短板是 format/max-search no-answer。
+我还做了 20step OPSD v2 的方差对照。20step seed43 在 bridge150 的 EM macro 是 0.5317，看似更高，但 correct 只有 81/150、format 0.8133、平均搜索 3.2533，综合弱于 5step 的 87/150、format 0.9067。因此最终选择 5step 不是因为省成本，而是因为更多步数没有带来更可靠的综合收益。
 
 这个项目我最想强调的不是某个单点指标，而是完整方法论：Agentic RL 不能只跑 reward 曲线，要把工具环境、trajectory、reward shaping、失败诊断和指标边界一起做清楚。
 
 ## 简历项目口述版
 
-我搭建了一个 Search-R1 Agentic RL 实验框架，基于 Qwen3.5-4B、PyTRIO GRPO 和 Zhihu Search backend，复现并改造搜索型 LLM Agent 的训练评测链路。工程上实现了统一搜索工具层、trajectory JSONL、offline diagnostics、reward sensitivity 和 turn-credit analysis。方法上针对多跳搜索中的 follow-up 缺失和 final-hop 早答问题，设计 evidence bridge / final-hop attribute turn-level reward shaping。最终在 dev70 上达到 EM 45.7%；在 bridge targeted eval 的 patched protocol 下，EM 从 prompt-only base 的 47.5% 提升到 51.4%，correct 从 74/150 提升到 83/150，同时定位 format/max-search no-answer 为下一阶段主要瓶颈。
+我搭建了一个 Search-R1 Agentic RL 实验框架，基于 Qwen3.5-4B、PyTRIO GRPO 和 Zhihu Search backend，复现并改造搜索型 LLM Agent 的训练评测链路。工程上实现了统一搜索工具层、trajectory JSONL、offline diagnostics、reward sensitivity 和 turn-credit analysis。方法上针对多跳搜索中的 follow-up 缺失和 final-hop 早答问题，设计 evidence bridge / final-hop attribute turn-level reward shaping，并在最强 guard-fix checkpoint 上加入 gated OPSD v2。最终路线为 guard-fix 20step + OPSD v2 5step：dev70 clean EM 48.6%、correct 34/70；bridge150 clean EM 52.4%、correct 87/150、format 90.7%。
 
 ## 指标边界口径
 
-面试中不要只说“我把 EM 提到 51.4%”，要补一句边界：
+面试中不要只说“我把 EM 提到 52.4%”，要补一句边界：
 
 ```text
-这个 51.4% 是 bridge_eval_150 的 patched protocol 结果，由 147 条 full run 记录加 3 条失败样本 retry 合成；它是当前最高 bridge EM/correct 证据，但不是一次独立全量 success rate 1.0 run。
+这个 52.4% 是 guard-fix 20step + OPSD v2 5step 在 bridge_eval_150 上的 clean chunk 合并结果，10 个 chunk 共 150 条 trajectory，tool failures 为 0。它比此前 guard-fix 20step patched 的 51.4% 更适合作为正式项目口径。
 ```
 
 如果想保守一点：
 
 ```text
-dev70 上有一次独立有效 retry，Zhihu success rate 1.0，EM 45.7%；bridge targeted eval 上 patched 结果显示 EM/correct 正向，但我在文档里明确标注它不等同严格全量 run。
+dev70 上 clean EM 48.6%，bridge150 上 clean EM 52.4%；但 bridge format 90.7% 仍低于 evidence-v2 20step 的 94.0%，所以我把下一步放在 alias80 和 format/max-search case review，而不是继续堆训练步数。
 ```
 
 ## 高频追问速答
@@ -59,13 +59,17 @@ SFT 需要高质量搜索轨迹标注，成本高且容易学固定模式。这�
 
 简单惩罚搜索行为会带来副作用。它可能减少无效搜索，但也可能压掉必要二跳搜索，导致 EM 下降。所以后面我从“惩罚坏行为”转向“奖励必要搜索轮次”，也就是 turn-level credit。
 
+**为什么 5step 可以作为最终选择？**
+
+这里的 5step 不是从 base 重新学搜索能力，而是在 guard-fix 20step 强 checkpoint 上做保守 refinement。20step seed43 对照显示，更多 OPSD 步数虽然让 bridge EM macro 略高，但 correct、format 和搜索成本综合更差，所以选择 5step 是实证选择，不是省略实验。
+
 **怎么保证不是工具 API 波动造成的？**
 
 所有 trajectory 都记录 tool success rate、tool failures、empty result 和错误类型。success rate 低于 1.0 的 full run 不进入正式表；patched 协议单独标注，不冒充独立全量评测。
 
 **下一步做什么？**
 
-先重跑一次独立全量 bridge150，要求 Zhihu success rate 1.0；同时针对 format/max-search no-answer 做更细的 guard，把 guard-fix 的 EM/correct 优势和 evidence-v2 的高 format 结合起来。
+主路线已固定，下一步补 `alias_granularity_eval_80`，验证最终 checkpoint 是否牺牲 alias/granularity；同时做 gained/lost case review，把 5step 的提升和 format 剩余问题讲清楚。
 
 ## 最后 15 秒总结
 

@@ -31,6 +31,7 @@ def parse_args() -> argparse.Namespace:
     """Parse eval, rollout, and backend arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", type=Path, default=DEFAULT_DATA)
+    parser.add_argument("--offset", type=int, default=0)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--base-model", default="Qwen/Qwen3.5-4B")
@@ -72,7 +73,14 @@ def main() -> None:
     load_dotenv(args.env_file)
 
     registry = build_registry(_backend_config(args))
-    examples = load_examples(args.data, limit=args.limit)
+    examples = load_examples(args.data, limit=0)
+    if args.offset < 0:
+        raise ValueError("--offset must be non-negative")
+    examples = examples[args.offset :]
+    if args.limit > 0:
+        examples = examples[: args.limit]
+    if not examples:
+        raise ValueError(f"no examples selected from {args.data}")
     service_client = trio.ServiceClient(api_key=os.getenv("PYTRIO_API_KEY") or None)
     sampling_client = service_client.create_sampling_client(
         base_model=args.base_model,

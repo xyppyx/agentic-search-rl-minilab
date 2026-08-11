@@ -18,12 +18,19 @@ from search_r1_minilab.rewards import RewardShapingConfig
 from search_r1_minilab.rollout import RolloutConfig, rollout_batch, trajectory_to_record
 from search_r1_minilab.tooling import BACKEND_CHOICES, BackendConfig, build_registry
 from search_r1_minilab.training import (
+    add_opsd_teacher_logprobs,
     add_reference_logprobs,
     build_custom_forward_datums,
     build_training_datums,
     loss_input_float_lists,
     make_grpo_kl_loss_fn,
     merge_trainer_metrics,
+    opsd_logprob_float_lists,
+    opsd_mask_float_lists,
+    OPSDConfig,
+    OPSD_CONTEXT_POLICIES,
+    OPSD_MASK_POLICIES,
+    OPSD_POSITIVE_POLICIES,
     pack_micro_batches,
     pick_mean_loss_metric,
     rollout_metrics,
@@ -98,6 +105,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kl-coef", type=float, default=DEFAULT_KL_COEF)
     parser.add_argument("--policy-ratio-clip", type=float, default=DEFAULT_POLICY_RATIO_CLIP)
     parser.add_argument("--reference-model-path")
+    parser.add_argument("--opsd-coef", type=float, default=0.0)
+    parser.add_argument(
+        "--opsd-context-policy",
+        choices=sorted(OPSD_CONTEXT_POLICIES),
+        default="same_context",
+    )
+    parser.add_argument(
+        "--opsd-mask-policy",
+        choices=sorted(OPSD_MASK_POLICIES),
+        default="credited_turns",
+    )
+    parser.add_argument(
+        "--opsd-positive-policy",
+        choices=sorted(OPSD_POSITIVE_POLICIES),
+        default="positive_advantage",
+    )
+    parser.add_argument("--opsd-min-teacher-logprob", type=float)
     parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
     parser.add_argument("--beta1", type=float, default=0.9)
     parser.add_argument("--beta2", type=float, default=0.95)
@@ -165,13 +189,20 @@ def main(args: argparse.Namespace | None = None) -> None:
         missing_final_hop_turn_penalty=args.missing_final_hop_turn_penalty,
         final_answer_guard_turn_penalty=args.final_answer_guard_turn_penalty,
     )
+    opsd_config = OPSDConfig(
+        coef=args.opsd_coef,
+        context_policy=args.opsd_context_policy,
+        mask_policy=args.opsd_mask_policy,
+        positive_policy=args.opsd_positive_policy,
+        min_teacher_logprob=args.opsd_min_teacher_logprob,
+    )
     adam_params = trio.AdamParams(
         learning_rate=args.learning_rate,
         beta1=args.beta1,
         beta2=args.beta2,
     )
     reference_client = None
-    if args.kl_coef > 0.0:
+    if args.kl_coef > 0.0 or opsd_config.coef > 0.0:
         reference_client = service_client.create_sampling_client(
             base_model=args.base_model,
             model_path=args.reference_model_path,
@@ -210,10 +241,30 @@ def main(args: argparse.Namespace | None = None) -> None:
                     )
 
                 train_bar.set_postfix(phase="build datums", refresh=True)
-                datums = build_training_datums(trajectories, turn_credit_config)
-                if reference_client is not None and datums:
+                datums = build_training_datums(
+                    trajectories,
+                    turn_credit_config,
+                    opsd_mask_policy=(
+                        opsd_config.mask_policy
+                        if opsd_config.coef > 0.0
+                        else "none"
+                    ),
+                    opsd_positive_policy=(
+                        opsd_config.positive_policy
+                        if opsd_config.coef > 0.0
+                        else "all"
+                    ),
+                )
+                if args.kl_coef > 0.0 and reference_client is not None and datums:
                     train_bar.set_postfix(phase="reference logprobs", refresh=True)
                     datums = add_reference_logprobs(datums, reference_client)
+                if opsd_config.coef > 0.0 and reference_client is not None and datums:
+                    train_bar.set_postfix(phase="OPSD teacher logprobs", refresh=True)
+                    datums = add_opsd_teacher_logprobs(
+                        datums,
+                        reference_client,
+                        min_teacher_logprob=opsd_config.min_teacher_logprob,
+                    )
                 micro_batches = pack_micro_batches(datums)
 
                 train_bar.set_postfix(phase="backward", refresh=True)
@@ -223,7 +274,7 @@ def main(args: argparse.Namespace | None = None) -> None:
                         micro_batch,
                         total_samples=len(trajectories),
                     )
-                    if args.kl_coef > 0.0:
+                    if args.kl_coef > 0.0 or opsd_config.coef > 0.0:
                         result = training_client.forward_backward_custom(
                             build_custom_forward_datums(weighted_items),
                             make_grpo_kl_loss_fn(
@@ -238,9 +289,22 @@ def main(args: argparse.Namespace | None = None) -> None:
                                 reference_logprobs_list=[
                                     _require_reference_logprobs(item)
                                     for item in weighted_items
-                                ],
+                                ]
+                                if args.kl_coef > 0.0
+                                else None,
                                 kl_coef=args.kl_coef,
                                 policy_ratio_clip=args.policy_ratio_clip,
+                                opsd_coef=opsd_config.coef,
+                                opsd_logprobs_list=(
+                                    opsd_logprob_float_lists(weighted_items)
+                                    if opsd_config.coef > 0.0
+                                    else None
+                                ),
+                                opsd_mask_list=(
+                                    opsd_mask_float_lists(weighted_items)
+                                    if opsd_config.coef > 0.0
+                                    else None
+                                ),
                             ),
                         ).result()
                     else:

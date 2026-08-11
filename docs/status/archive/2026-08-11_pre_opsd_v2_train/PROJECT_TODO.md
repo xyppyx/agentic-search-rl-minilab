@@ -29,36 +29,26 @@
 ### 4. Evaluation Ladder
 
 - 验收条件：依次完成 local BM25 1-step smoke、Zhihu dev-5 health、dev70 小预算对照；只有 dev70 不明显退化时才考虑 bridge150 或 alias80。
-- 当前状态：2026-08-11 OPSD v1 evaluation ladder 已完成；local smoke、Zhihu dev-5 health、5-step train、训练后 dev-5 和 dev70 均完成且工具 success rate 为 1.0。Base 起点 OPSD v2 已完成 5-step 有效评测和用户指定的 20-step 压力测试，但未超过 turn-credit 主线。随后完成从 `turn-credit-final-hop-guardfix-20step-20260806` final state 恢复的 OPSD v2 5-step/20-step 对照；其中 5-step dev70 clean EM 0.4857、format 0.9857、平均搜索 1.7286，成为当前最高 clean dev70。
-- bridge150 状态：`guardfix20-resume-opsd-v2-5step-20260811` 已完成 10 个 clean chunk 合并的 full eval，EM 0.5242、correct 87/150、format 0.9067、平均搜索 3.1400、tool failures 0。该结果超过此前 guard-fix 20-step patched EM/correct，但 format 仍弱于 evidence-v2 20-step。
-- 20-step 方差对照：`guardfix20-resume-opsd-v2-20step-seed43-20260811` 已完成 clean 训练/dev70/bridge150；dev70 EM 0.4571、correct 32/70、format 1.0000，bridge150 EM 0.5317、correct 81/150、format 0.8133、平均搜索 3.2533。宏平均 bridge EM 略高，但 correct/format/search 综合弱于 5-step。
+- 当前状态：2026-08-11 OPSD v1 evaluation ladder 已完成；local smoke、Zhihu dev-5 health、5-step train、训练后 dev-5 和 dev70 均完成且工具 success rate 为 1.0。Dev70 EM 0.4286、format 0.9286、平均搜索 1.9143，相对 guard-fix 5-step EM 持平但 format/search 退化，因此不进入 bridge150 或 alias80。
 - 关键指标：EM、correct、format、平均搜索、`missing_followup_query`、`bad_max_search_loop`、tool success rate、OPSD mask 命中率、teacher-student logprob gap。
 - 停止条件：Zhihu API 出现 429、timeout、credential/http error、`tool_failures > 0` 或 success rate < 1.0；PyTRIO sampling await 超过 2 分钟无进度；OPSD 明显降低 format 或增加 missing follow-up。
 
 ### 5. OPSD v2 Decision
 
 - 验收条件：运行真实 Zhihu 5-step v2，确认训练阶段 tool success rate 1.0、OPSD mask 非零且不失控，再跑 dev70 小预算对照。
-- 当前状态：2026-08-11 base 起点 v2 训练与评测已完成；5-step dev70 EM 0.4143、format 0.9143、平均搜索 1.9714，20-step dev70 reference EM 0.4429、format 1.0000、平均搜索 2.0286 但工具门槛未过。随后从 guardfix-20step final state 恢复并使用 guardfix final weights 作为 KL/reference 与 OPSD teacher：5-step dev70 clean EM 0.4857、correct 34/70、format 0.9857、平均搜索 1.7286；20-step dev70 reference EM 0.4571、format 0.9714、平均搜索 2.0571，但训练和 dev70 都有工具失败。
+- 当前状态：v2 代码与 local smoke 已完成；尚未运行真实 Zhihu v2 训练。
 - 推荐命令要点：`--opsd-coef 0.01 --opsd-mask-policy credited_turns --opsd-positive-policy positive_advantage --opsd-min-teacher-logprob -3.0`，其余参数沿用 guard-fix 5-step。
 - 停止条件：训练阶段 Zhihu success rate < 1.0、OPSD masked tokens 长期为 0、dev70 format 低于 guard-fix 5-step、平均搜索继续上升、`missing_followup_query` 增加，或 OPSD mask/token 占比失控。
-
-### 6. OPSD Stop/Park
-
-- 验收条件：明确 OPSD 分支是否停放，以及后续若重启需要满足什么设计变化。
-- 当前决策：固定最终路线为 `turn-credit-final-hop-guardfix-20step-20260806 -> guardfix20-resume-opsd-v2-5step-20260811`。停放 base 起点 same-context OPSD，不再继续做同类 base 起点训练；20-step seed43 方差对照不支持替代 5-step。后续只补验证，不再改主路线。
-- 允许重启条件：引入本质不同的 teacher 或监督信号，例如离线 correct trajectory teacher、answer-span 级别蒸馏、preference-filtered replay，且先在 local/mock smoke 证明不会蒸馏错误 final answer 或 tool observation tokens。
 
 ## Parked Historical Tracks
 
 - Reward penalty v1/v2/v3/v4、max-search penalty、follow-up bonus、no-search guard 等旧 ablation 暂停，不再作为活跃 TODO。
 - KL/std 单因素消融优先级下调；当前默认训练配置继续保留 KL/std 稳定化组合。
 - Evidence-v2 50-step 和 guard-fix 独立 full bridge150 可作为后续严谨评测补充，但不是 gated OPSD 前置条件。
-- `guardfix20-resume-opsd-v2-5step-20260811` 的 alias80 尚未评测；这是最终路线的下一步验证，不是路线选择前置条件。
 
 ## 未解决风险
 
 - 真实 Zhihu Search API、PyTRIO 远程训练和 SwanLab 依赖外部服务状态；任何真实搜索实验都必须先做 health check，并分开记录工具失败与模型策略失败。
 - 当前 bridge150 最强 guard-fix 指标是 patched protocol，不应包装成论文式独立 full run。
 - OPSD/OPD 类方法容易把 teacher 的短答案偏好转化成少搜/早答，需要 gate、mask 和 stop condition 约束。
-- Same-context OPSD v1/v2 在 base 起点收益不足；在 guardfix checkpoint 上 5-step 有明确 clean dev70/bridge150 综合增益。20-step seed43 的 bridge EM macro 略高，但 correct/format/search 更弱，因此不应把“更多步数”包装成最终路线。
 - Alias/granularity eval 尚未验证 guard-fix 20-step，后续如果宣称泛化收益必须补跑。

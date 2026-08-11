@@ -31,6 +31,19 @@ TURN_CREDIT_POLICIES = {
     "evidence_bridge",
     "final_hop_bridge",
 }
+OPSD_CONTEXT_POLICIES = {"same_context"}
+OPSD_MASK_POLICIES = {
+    "none",
+    "final_answer",
+    "credited_turns",
+    "final_and_credited",
+}
+OPSD_POSITIVE_POLICIES = {
+    "all",
+    "positive_advantage",
+    "positive_reward",
+    "exact_match",
+}
 
 
 @dataclass(frozen=True)
@@ -65,6 +78,33 @@ class TurnCreditConfig:
             raise ValueError("final answer guard turn penalty must be non-negative")
 
 
+@dataclass(frozen=True)
+class OPSDConfig:
+    """Optional gated on-policy self-distillation auxiliary objective."""
+
+    coef: float = 0.0
+    context_policy: str = "same_context"
+    mask_policy: str = "credited_turns"
+    positive_policy: str = "positive_advantage"
+    min_teacher_logprob: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.coef < 0.0:
+            raise ValueError("OPSD coef must be non-negative")
+        if self.context_policy not in OPSD_CONTEXT_POLICIES:
+            raise ValueError("OPSD context policy must be 'same_context'")
+        if self.mask_policy not in OPSD_MASK_POLICIES:
+            raise ValueError(
+                "OPSD mask policy must be 'none', 'final_answer', "
+                "'credited_turns', or 'final_and_credited'"
+            )
+        if self.positive_policy not in OPSD_POSITIVE_POLICIES:
+            raise ValueError(
+                "OPSD positive policy must be 'all', 'positive_advantage', "
+                "'positive_reward', or 'exact_match'"
+            )
+
+
 class TrainingDatum:
     """A PyTRIO datum plus its unpadded sequence length."""
 
@@ -74,20 +114,40 @@ class TrainingDatum:
         num_tokens: int,
         *,
         reference_logprobs: list[float] | None = None,
+        opsd_logprobs: list[float] | None = None,
+        opsd_mask: list[float] | None = None,
     ) -> None:
         self.datum = datum
         self.num_tokens = num_tokens
         self.reference_logprobs = reference_logprobs
+        self.opsd_logprobs = opsd_logprobs
+        self.opsd_mask = opsd_mask
 
 
-def build_datum(trajectory: Trajectory) -> TrainingDatum:
+def build_datum(
+    trajectory: Trajectory,
+    *,
+    opsd_mask_policy: str = "none",
+    opsd_positive_policy: str = "all",
+) -> TrainingDatum:
     """Convert one rollout trajectory into one PyTRIO training datum."""
+    if opsd_mask_policy not in OPSD_MASK_POLICIES:
+        raise ValueError(
+            "OPSD mask policy must be 'none', 'final_answer', "
+            "'credited_turns', or 'final_and_credited'"
+        )
+    if opsd_positive_policy not in OPSD_POSITIVE_POLICIES:
+        raise ValueError(
+            "OPSD positive policy must be 'all', 'positive_advantage', "
+            "'positive_reward', or 'exact_match'"
+        )
     if not trajectory.turns:
         raise ValueError("cannot build a training datum without assistant turns")
 
     full_tokens: list[int] = []
     old_logprobs_by_token: list[float] = []
     advantages_by_token: list[float] = []
+    opsd_mask_by_token: list[float] = []
     assistant_token_count = 0
 
     for turn_index, turn in enumerate(trajectory.turns):
@@ -105,17 +165,30 @@ def build_datum(trajectory: Trajectory) -> TrainingDatum:
                 f"assistant turn {turn_index + 1} prompt is not a trajectory prefix"
             )
 
-        full_tokens.extend(delta_observation)
-        full_tokens.extend(turn.completion_tokens)
         turn_advantage = (
             trajectory.advantage
             if turn.effective_advantage is None
             else turn.effective_advantage
         )
+        full_tokens.extend(delta_observation)
+        full_tokens.extend(turn.completion_tokens)
+        turn_opsd_mask = (
+            1.0
+            if _opsd_turn_selected(
+                trajectory,
+                turn_index,
+                opsd_mask_policy,
+                positive_policy=opsd_positive_policy,
+                turn_advantage=turn_advantage,
+            )
+            else 0.0
+        )
         old_logprobs_by_token.extend([0.0] * len(delta_observation))
         old_logprobs_by_token.extend(turn.logprobs)
         advantages_by_token.extend([0.0] * len(delta_observation))
         advantages_by_token.extend([turn_advantage] * len(turn.completion_tokens))
+        opsd_mask_by_token.extend([0.0] * len(delta_observation))
+        opsd_mask_by_token.extend([turn_opsd_mask] * len(turn.completion_tokens))
         assistant_token_count += len(turn.completion_tokens)
 
     if assistant_token_count == 0:
@@ -124,20 +197,23 @@ def build_datum(trajectory: Trajectory) -> TrainingDatum:
         len(full_tokens)
         == len(old_logprobs_by_token)
         == len(advantages_by_token)
+        == len(opsd_mask_by_token)
     ):
-        raise ValueError("trajectory token/logprob/advantage lengths differ")
+        raise ValueError("trajectory token/logprob/advantage/OPSD mask lengths differ")
 
     input_tokens = full_tokens[:-1]
     target_tokens = full_tokens[1:]
     old_logprobs = old_logprobs_by_token[1:]
     advantages = advantages_by_token[1:]
+    opsd_mask = opsd_mask_by_token[1:]
     if not (
         len(input_tokens)
         == len(target_tokens)
         == len(old_logprobs)
         == len(advantages)
+        == len(opsd_mask)
     ):
-        raise ValueError("datum input/target/logprob/advantage lengths differ")
+        raise ValueError("datum input/target/logprob/advantage/OPSD mask lengths differ")
     if len(input_tokens) > MAX_TRAIN_CONTEXT_TOKENS:
         raise ValueError(f"datum exceeds {MAX_TRAIN_CONTEXT_TOKENS} tokens")
 
@@ -149,19 +225,26 @@ def build_datum(trajectory: Trajectory) -> TrainingDatum:
             "advantages": np.asarray(advantages, dtype=np.float32),
         },
     )
-    return TrainingDatum(datum, len(input_tokens))
+    return TrainingDatum(datum, len(input_tokens), opsd_mask=opsd_mask)
 
 
 def build_training_datums(
     trajectories: list[Trajectory],
     turn_credit: TurnCreditConfig | None = None,
+    *,
+    opsd_mask_policy: str = "none",
+    opsd_positive_policy: str = "all",
 ) -> list[TrainingDatum]:
     """Build datums for trajectories with non-zero group-relative advantages."""
     apply_turn_credit(trajectories, turn_credit or TurnCreditConfig())
     datums: list[TrainingDatum] = []
     for trajectory in trajectories:
         if any(turn.completion_tokens for turn in trajectory.turns):
-            datum = build_datum(trajectory)
+            datum = build_datum(
+                trajectory,
+                opsd_mask_policy=opsd_mask_policy,
+                opsd_positive_policy=opsd_positive_policy,
+            )
             if datum_loss_token_count(datum) > 0:
                 datums.append(datum)
     return datums
@@ -457,6 +540,62 @@ def _final_answer_turn_index(events: list[dict[str, Any]]) -> int | None:
     return assistant_indices[-1][0] if assistant_indices else None
 
 
+def _opsd_turn_selected(
+    trajectory: Trajectory,
+    turn_index: int,
+    policy: str,
+    *,
+    positive_policy: str,
+    turn_advantage: float,
+) -> bool:
+    if policy == "none":
+        return False
+    turn = trajectory.turns[turn_index]
+    credited = bool(turn.credit_label)
+    final_answer = _is_final_answer_turn(trajectory.events, turn_index)
+    if policy == "final_answer":
+        selected = final_answer
+    elif policy == "credited_turns":
+        selected = credited
+    elif policy == "final_and_credited":
+        selected = final_answer or credited
+    else:
+        raise ValueError(f"unsupported OPSD mask policy: {policy}")
+    return selected and _opsd_positive_gate(
+        trajectory,
+        positive_policy,
+        turn_advantage=turn_advantage,
+    )
+
+
+def _opsd_positive_gate(
+    trajectory: Trajectory,
+    policy: str,
+    *,
+    turn_advantage: float,
+) -> bool:
+    if policy == "all":
+        return True
+    if policy == "positive_advantage":
+        return turn_advantage > 0.0
+    if policy == "positive_reward":
+        return trajectory.reward > 0.0
+    if policy == "exact_match":
+        return trajectory.exact_match
+    raise ValueError(f"unsupported OPSD positive policy: {policy}")
+
+
+def _is_final_answer_turn(events: list[dict[str, Any]], turn_index: int) -> bool:
+    assistant_index = 0
+    for event in events:
+        if event.get("role") != "assistant":
+            continue
+        if assistant_index == turn_index:
+            return event.get("parsed_kind") == "answer"
+        assistant_index += 1
+    return False
+
+
 def datum_size(item: TrainingDatum) -> int:
     """Return the unpadded datum token length."""
     return item.num_tokens
@@ -520,18 +659,20 @@ def weight_micro_batch_items_for_global_mean(
     for item in micro_batch:
         loss_inputs = item.datum.loss_fn_inputs
         weighted_datum = trio.Datum(
-                model_input=item.datum.model_input,
-                loss_fn_inputs={
-                    "target_tokens": _to_numpy(loss_inputs["target_tokens"]),
-                    "logprobs": _to_numpy(loss_inputs["logprobs"]),
-                    "advantages": _to_numpy(loss_inputs["advantages"]) * micro_batch_weight,
-                },
-            )
+            model_input=item.datum.model_input,
+            loss_fn_inputs={
+                "target_tokens": _to_numpy(loss_inputs["target_tokens"]),
+                "logprobs": _to_numpy(loss_inputs["logprobs"]),
+                "advantages": _to_numpy(loss_inputs["advantages"]) * micro_batch_weight,
+            },
+        )
         weighted_items.append(
             TrainingDatum(
                 weighted_datum,
                 item.num_tokens,
                 reference_logprobs=item.reference_logprobs,
+                opsd_logprobs=item.opsd_logprobs,
+                opsd_mask=item.opsd_mask,
             )
         )
     return weighted_items
@@ -547,6 +688,8 @@ def add_reference_logprobs(
             item.datum,
             item.num_tokens,
             reference_logprobs=compute_reference_logprobs(item, reference_client),
+            opsd_logprobs=item.opsd_logprobs,
+            opsd_mask=item.opsd_mask,
         )
         for item in datums
     ]
@@ -557,6 +700,67 @@ def compute_reference_logprobs(
     reference_client: Any,
 ) -> list[float]:
     """Compute reference logprobs for one already-shifted training datum."""
+    advantages = _to_numpy(item.datum.loss_fn_inputs["advantages"])
+    required_mask = [float(value) != 0.0 for value in advantages]
+    return _compute_shifted_logprobs(
+        item,
+        reference_client,
+        required_mask=required_mask,
+        missing_message="missing reference logprob for trainable token",
+    )
+
+
+def add_opsd_teacher_logprobs(
+    datums: list[TrainingDatum],
+    teacher_client: Any,
+    *,
+    min_teacher_logprob: float | None = None,
+) -> list[TrainingDatum]:
+    """Attach OPSD teacher logprobs aligned to each shifted target token."""
+    updated: list[TrainingDatum] = []
+    for item in datums:
+        opsd_logprobs = compute_opsd_teacher_logprobs(item, teacher_client)
+        opsd_mask = list(_require_opsd_mask(item))
+        if min_teacher_logprob is not None:
+            opsd_mask = [
+                mask if logprob >= min_teacher_logprob else 0.0
+                for mask, logprob in zip(opsd_mask, opsd_logprobs, strict=True)
+            ]
+        updated.append(
+            TrainingDatum(
+                item.datum,
+                item.num_tokens,
+                reference_logprobs=item.reference_logprobs,
+                opsd_logprobs=opsd_logprobs,
+                opsd_mask=opsd_mask,
+            )
+        )
+    return updated
+
+
+def compute_opsd_teacher_logprobs(
+    item: TrainingDatum,
+    teacher_client: Any,
+) -> list[float]:
+    """Compute OPSD teacher logprobs for masked shifted target tokens."""
+    opsd_mask = _require_opsd_mask(item)
+    required_mask = [float(value) != 0.0 for value in opsd_mask]
+    return _compute_shifted_logprobs(
+        item,
+        teacher_client,
+        required_mask=required_mask,
+        missing_message="missing OPSD teacher logprob for masked token",
+    )
+
+
+def _compute_shifted_logprobs(
+    item: TrainingDatum,
+    logprob_client: Any,
+    *,
+    required_mask: list[bool],
+    missing_message: str,
+) -> list[float]:
+    """Compute model logprobs aligned to each already-shifted target token."""
     input_tokens = [int(token) for token in item.datum.model_input.tolist()]
     target_tokens = [
         int(token) for token in _to_numpy(item.datum.loss_fn_inputs["target_tokens"])
@@ -565,25 +769,35 @@ def compute_reference_logprobs(
         raise ValueError("datum must contain input and target tokens")
     if len(input_tokens) != len(target_tokens):
         raise ValueError("datum input and target lengths differ")
+    if len(required_mask) != len(target_tokens):
+        raise ValueError("required logprob mask length does not match target tokens")
 
     full_tokens = [*input_tokens, target_tokens[-1]]
-    all_logprobs = reference_client.compute_logprobs(
+    all_logprobs = logprob_client.compute_logprobs(
         trio.ModelInput.from_ints(full_tokens)
     ).result()
-    reference_logprobs = all_logprobs[1:]
-    if len(reference_logprobs) != len(target_tokens):
-        raise ValueError("reference logprob length does not match target tokens")
+    shifted_logprobs = all_logprobs[1:]
+    if len(shifted_logprobs) != len(target_tokens):
+        raise ValueError("model logprob length does not match target tokens")
 
-    advantages = _to_numpy(item.datum.loss_fn_inputs["advantages"])
     aligned: list[float] = []
-    for logprob, advantage in zip(reference_logprobs, advantages, strict=True):
+    for logprob, required in zip(shifted_logprobs, required_mask, strict=True):
         if logprob is None:
-            if float(advantage) != 0.0:
-                raise ValueError("missing reference logprob for trainable token")
+            if required:
+                raise ValueError(missing_message)
             aligned.append(0.0)
         else:
             aligned.append(float(logprob))
     return aligned
+
+
+def _require_opsd_mask(item: TrainingDatum) -> list[float]:
+    if item.opsd_mask is None:
+        raise ValueError("OPSD mask is missing")
+    target_tokens = _to_numpy(item.datum.loss_fn_inputs["target_tokens"])
+    if len(item.opsd_mask) != len(target_tokens):
+        raise ValueError("OPSD mask length does not match target tokens")
+    return item.opsd_mask
 
 
 def build_custom_forward_datums(items: list[TrainingDatum]) -> list[trio.Datum]:
@@ -602,16 +816,27 @@ def build_custom_forward_datums(items: list[TrainingDatum]) -> list[trio.Datum]:
 def make_grpo_kl_loss_fn(
     sampling_logprobs_list: list[list[float]],
     advantages_list: list[list[float]],
-    reference_logprobs_list: list[list[float]],
+    reference_logprobs_list: list[list[float]] | None = None,
     *,
     kl_coef: float,
     policy_ratio_clip: float = 0.0,
+    opsd_coef: float = 0.0,
+    opsd_logprobs_list: list[list[float]] | None = None,
+    opsd_mask_list: list[list[float]] | None = None,
 ) -> Callable[[list[trio.Datum], list[Any]], tuple[Any, dict[str, float]]]:
     """Create a custom GRPO loss with sampled-token reference logprob drift penalty."""
     if kl_coef < 0.0:
         raise ValueError("kl_coef must be non-negative")
     if policy_ratio_clip < 0.0:
         raise ValueError("policy_ratio_clip must be non-negative")
+    if opsd_coef < 0.0:
+        raise ValueError("OPSD coef must be non-negative")
+    if kl_coef > 0.0 and reference_logprobs_list is None:
+        raise ValueError("KL training requires reference logprobs")
+    if opsd_coef > 0.0 and (
+        opsd_logprobs_list is None or opsd_mask_list is None
+    ):
+        raise ValueError("OPSD training requires teacher logprobs and mask")
 
     def loss_fn(
         data: list[trio.Datum],
@@ -619,29 +844,38 @@ def make_grpo_kl_loss_fn(
     ) -> tuple[Any, dict[str, float]]:
         import torch
 
+        batch_len = len(data)
         if not (
-            len(data)
+            batch_len
             == len(current_logprobs_list)
             == len(sampling_logprobs_list)
             == len(advantages_list)
-            == len(reference_logprobs_list)
         ):
             raise ValueError("GRPO KL loss got mismatched batch lengths")
+        if reference_logprobs_list is not None and len(reference_logprobs_list) != batch_len:
+            raise ValueError("GRPO KL reference batch length mismatch")
+        if opsd_logprobs_list is not None and len(opsd_logprobs_list) != batch_len:
+            raise ValueError("OPSD teacher batch length mismatch")
+        if opsd_mask_list is not None and len(opsd_mask_list) != batch_len:
+            raise ValueError("OPSD mask batch length mismatch")
 
         losses = []
         ratio_chunks = []
         kl_chunks = []
         clip_chunks = []
+        opsd_current_chunks = []
+        opsd_teacher_chunks = []
+        opsd_gap_chunks = []
         train_tokens = 0
+        opsd_masked_tokens = 0
         denominator = 0
 
-        for current_logprobs, old_values, advantage_values, reference_values in zip(
+        for item_index, (current_logprobs, old_values, advantage_values) in enumerate(zip(
             current_logprobs_list,
             sampling_logprobs_list,
             advantages_list,
-            reference_logprobs_list,
             strict=True,
-        ):
+        )):
             current = current_logprobs.float()
             device = current.device
             old = torch.as_tensor(old_values, dtype=torch.float32, device=device)
@@ -650,13 +884,17 @@ def make_grpo_kl_loss_fn(
                 dtype=torch.float32,
                 device=device,
             )
-            reference = torch.as_tensor(
-                reference_values,
-                dtype=torch.float32,
-                device=device,
-            )
-            if not (len(current) == len(old) == len(advantages) == len(reference)):
+            reference = None
+            if reference_logprobs_list is not None:
+                reference = torch.as_tensor(
+                    reference_logprobs_list[item_index],
+                    dtype=torch.float32,
+                    device=device,
+                )
+            if not (len(current) == len(old) == len(advantages)):
                 raise ValueError("GRPO KL datum fields must have the same length")
+            if reference is not None and len(reference) != len(current):
+                raise ValueError("GRPO KL reference field must match current length")
 
             ratio = torch.exp(current - old)
             effective_ratio = ratio
@@ -671,6 +909,8 @@ def make_grpo_kl_loss_fn(
             objective = effective_ratio * advantages
             datum_loss = -objective.sum()
             if torch.any(train_mask) and kl_coef > 0.0:
+                if reference is None:
+                    raise ValueError("KL training requires reference logprobs")
                 logprob_drift = current - reference
                 kl_penalty = 0.5 * logprob_drift.pow(2)
                 datum_loss = datum_loss + kl_coef * kl_penalty[train_mask].sum()
@@ -686,7 +926,36 @@ def make_grpo_kl_loss_fn(
                     )
                 train_tokens += int(train_mask.sum().item())
 
-        loss = torch.stack(losses).sum()
+            if opsd_logprobs_list is not None and opsd_mask_list is not None:
+                teacher = torch.as_tensor(
+                    opsd_logprobs_list[item_index],
+                    dtype=torch.float32,
+                    device=device,
+                )
+                opsd_mask = torch.as_tensor(
+                    opsd_mask_list[item_index],
+                    dtype=torch.float32,
+                    device=device,
+                )
+                if not (len(current) == len(teacher) == len(opsd_mask)):
+                    raise ValueError("OPSD datum fields must have the same length")
+                selected = opsd_mask != 0.0
+                if torch.any(selected):
+                    selected_current = current[selected]
+                    selected_teacher = teacher[selected]
+                    opsd_current_chunks.append(selected_current)
+                    opsd_teacher_chunks.append(selected_teacher.detach())
+                    opsd_gap_chunks.append((selected_current - selected_teacher).abs().detach())
+                    opsd_masked_tokens += int(selected.sum().item())
+
+        grpo_loss = torch.stack(losses).sum()
+        loss = grpo_loss
+        opsd_loss_value = 0.0
+        if opsd_coef > 0.0 and opsd_current_chunks:
+            opsd_current = torch.cat(opsd_current_chunks)
+            opsd_loss = -opsd_current.mean()
+            loss = loss + opsd_coef * opsd_loss
+            opsd_loss_value = float(opsd_loss.detach().item())
         metrics = {
             "loss_mean": float(loss.detach().item() / denominator)
             if denominator > 0
@@ -694,6 +963,19 @@ def make_grpo_kl_loss_fn(
             "grpo_kl/coef": float(kl_coef),
             "grpo_kl/train_tokens": float(train_tokens),
         }
+        if opsd_coef > 0.0 or opsd_logprobs_list is not None or opsd_mask_list is not None:
+            metrics.update(
+                {
+                    "opsd/coef": float(opsd_coef),
+                    "opsd/masked_tokens": float(opsd_masked_tokens),
+                    "opsd/mask_rate": (
+                        float(opsd_masked_tokens / denominator)
+                        if denominator > 0
+                        else 0.0
+                    ),
+                    "opsd/loss_mean": opsd_loss_value,
+                }
+            )
         if ratio_chunks:
             ratios = torch.cat(ratio_chunks)
             metrics["grpo_kl/ratio_mean"] = float(ratios.mean().item())
@@ -704,6 +986,13 @@ def make_grpo_kl_loss_fn(
         if clip_chunks:
             clips = torch.cat(clip_chunks)
             metrics["grpo_kl/clip_fraction"] = float(clips.mean().item())
+        if opsd_teacher_chunks:
+            teacher_logprobs = torch.cat(opsd_teacher_chunks)
+            gaps = torch.cat(opsd_gap_chunks)
+            metrics["opsd/teacher_logprob_mean"] = float(
+                teacher_logprobs.mean().item()
+            )
+            metrics["opsd/student_teacher_gap_mean"] = float(gaps.mean().item())
         return loss, metrics
 
     return loss_fn
@@ -714,6 +1003,24 @@ def loss_input_float_lists(items: list[TrainingDatum], key: str) -> list[list[fl
     values: list[list[float]] = []
     for item in items:
         values.append([float(value) for value in _to_numpy(item.datum.loss_fn_inputs[key])])
+    return values
+
+
+def opsd_logprob_float_lists(items: list[TrainingDatum]) -> list[list[float]]:
+    """Read OPSD teacher logprobs from training datums."""
+    values: list[list[float]] = []
+    for item in items:
+        if item.opsd_logprobs is None:
+            raise ValueError("OPSD teacher logprobs are missing")
+        values.append([float(value) for value in item.opsd_logprobs])
+    return values
+
+
+def opsd_mask_float_lists(items: list[TrainingDatum]) -> list[list[float]]:
+    """Read OPSD token masks from training datums."""
+    values: list[list[float]] = []
+    for item in items:
+        values.append([float(value) for value in _require_opsd_mask(item)])
     return values
 
 

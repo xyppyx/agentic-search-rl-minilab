@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
+from unittest.mock import patch
 
 from search_r1_minilab.data import SearchExample
 from search_r1_minilab.rollout import (
@@ -20,13 +21,18 @@ from search_r1_minilab.rewards import RewardShapingConfig
 from search_r1_minilab.tooling import BackendConfig, build_registry
 from search_r1_minilab.tools import LocalBM25Backend, ToolRegistry
 from search_r1_minilab.training import (
+    add_opsd_teacher_logprobs,
     add_reference_logprobs,
     build_custom_forward_datums,
     build_datum,
     build_training_datums,
+    compute_opsd_teacher_logprobs,
     compute_reference_logprobs,
     datum_loss_token_count,
     evaluation_metrics,
+    make_grpo_kl_loss_fn,
+    opsd_logprob_float_lists,
+    opsd_mask_float_lists,
     pack_micro_batches,
     TurnCreditConfig,
     weight_micro_batch_for_global_mean,
@@ -609,14 +615,106 @@ class TrainingRolloutTest(unittest.TestCase):
         )
         datum = build_datum(trajectory)
         datum.reference_logprobs = [-0.4, -0.5]
+        datum.opsd_logprobs = [-0.6, -0.7]
+        datum.opsd_mask = [1.0, 0.0]
 
         weighted = weight_micro_batch_items_for_global_mean([datum], total_samples=2)
 
         self.assertEqual(weighted[0].reference_logprobs, [-0.4, -0.5])
+        self.assertEqual(weighted[0].opsd_logprobs, [-0.6, -0.7])
+        self.assertEqual(weighted[0].opsd_mask, [1.0, 0.0])
         self.assertEqual(
             weighted[0].datum.loss_fn_inputs["advantages"].to_numpy().tolist(),
             [0.5, 0.5],
         )
+
+    def test_opsd_final_and_credited_mask_excludes_observation_tokens(self) -> None:
+        trajectory = Trajectory(
+            example=SearchExample("q-opsd-mask", "Question?", ["A"], "test"),
+            group_index=0,
+            messages=[],
+            advantage=1.0,
+            events=[
+                {"role": "assistant", "parsed_kind": "tool", "tool_call": {"query": "q"}},
+                {"role": "tool", "observation": "obs"},
+                {"role": "assistant", "parsed_kind": "answer"},
+            ],
+            turns=[
+                AssistantTurn([10], [20, 21], [0.1, 0.2], "search"),
+                AssistantTurn([10, 20, 21, 30, 31], [40], [0.3], "Answer: A"),
+            ],
+        )
+        trajectory.turns[0].credit_label = "evidence_bridge_search"
+
+        datum = build_datum(trajectory, opsd_mask_policy="final_and_credited")
+
+        self.assertEqual(
+            datum.datum.loss_fn_inputs["target_tokens"].to_numpy().tolist(),
+            [20, 21, 30, 31, 40],
+        )
+        self.assertEqual(datum.opsd_mask, [1.0, 1.0, 0.0, 0.0, 1.0])
+
+    def test_opsd_positive_advantage_gate_excludes_negative_final_answer(self) -> None:
+        trajectory = Trajectory(
+            example=SearchExample("q-opsd-positive", "Question?", ["A"], "test"),
+            group_index=0,
+            messages=[],
+            reward=0.0,
+            advantage=-1.0,
+            exact_match=False,
+            valid_format=True,
+            events=[
+                {"role": "assistant", "parsed_kind": "tool", "tool_call": {"query": "q"}},
+                {"role": "tool", "observation": "obs"},
+                {"role": "assistant", "parsed_kind": "answer"},
+            ],
+            turns=[
+                AssistantTurn([10], [20, 21], [0.1, 0.2], "search"),
+                AssistantTurn([10, 20, 21, 30, 31], [40], [0.3], "Answer: B"),
+            ],
+        )
+        trajectory.turns[0].credit_label = "evidence_bridge_search"
+        trajectory.turns[0].effective_advantage = 0.05
+
+        datum = build_datum(
+            trajectory,
+            opsd_mask_policy="final_and_credited",
+            opsd_positive_policy="positive_advantage",
+        )
+
+        self.assertEqual(
+            datum.datum.loss_fn_inputs["target_tokens"].to_numpy().tolist(),
+            [20, 21, 30, 31, 40],
+        )
+        self.assertEqual(datum.opsd_mask, [1.0, 1.0, 0.0, 0.0, 0.0])
+
+    def test_opsd_exact_match_gate_requires_correct_trajectory(self) -> None:
+        trajectory = Trajectory(
+            example=SearchExample("q-opsd-exact", "Question?", ["A"], "test"),
+            group_index=0,
+            messages=[],
+            reward=0.0,
+            advantage=1.0,
+            exact_match=False,
+            valid_format=True,
+            events=[{"role": "assistant", "parsed_kind": "answer"}],
+            turns=[AssistantTurn([10], [20, 21], [0.1, 0.2], "Answer: B")],
+        )
+
+        wrong = build_datum(
+            trajectory,
+            opsd_mask_policy="final_answer",
+            opsd_positive_policy="exact_match",
+        )
+        trajectory.exact_match = True
+        correct = build_datum(
+            trajectory,
+            opsd_mask_policy="final_answer",
+            opsd_positive_policy="exact_match",
+        )
+
+        self.assertEqual(wrong.opsd_mask, [0.0, 0.0])
+        self.assertEqual(correct.opsd_mask, [1.0, 1.0])
 
     def test_reference_logprobs_align_to_shifted_targets(self) -> None:
         trajectory = Trajectory(
@@ -634,6 +732,89 @@ class TrainingRolloutTest(unittest.TestCase):
         self.assertEqual(reference.requests, [[10, 11, 12, 13]])
         self.assertEqual(ref_logprobs, [-0.11, -0.12, -0.13])
 
+    def test_opsd_teacher_logprobs_align_to_shifted_targets(self) -> None:
+        trajectory = Trajectory(
+            example=SearchExample("q-opsd", "Question?", ["A"], "test"),
+            group_index=0,
+            messages=[],
+            advantage=1.0,
+            events=[{"role": "assistant", "parsed_kind": "answer"}],
+            turns=[AssistantTurn([10, 11], [12, 13], [0.1, 0.2], "Answer: A")],
+        )
+        datum = build_datum(trajectory, opsd_mask_policy="final_answer")
+        teacher = FakeReferenceClient()
+
+        datums = add_opsd_teacher_logprobs([datum], teacher)
+
+        self.assertEqual(teacher.requests, [[10, 11, 12, 13]])
+        self.assertEqual(datums[0].opsd_logprobs, [-0.11, -0.12, -0.13])
+        self.assertEqual(datums[0].opsd_mask, [0.0, 1.0, 1.0])
+
+    def test_opsd_teacher_logprobs_reject_length_mismatch(self) -> None:
+        trajectory = Trajectory(
+            example=SearchExample("q-opsd-bad", "Question?", ["A"], "test"),
+            group_index=0,
+            messages=[],
+            advantage=1.0,
+            events=[{"role": "assistant", "parsed_kind": "answer"}],
+            turns=[AssistantTurn([10], [11, 12], [0.1, 0.2], "Answer: A")],
+        )
+        datum = build_datum(trajectory, opsd_mask_policy="final_answer")
+
+        with self.assertRaisesRegex(ValueError, "model logprob length"):
+            compute_opsd_teacher_logprobs(datum, BadLengthReferenceClient())
+
+    def test_opsd_loss_coef_zero_preserves_grpo_kl_metrics(self) -> None:
+        import torch
+
+        loss_fn = make_grpo_kl_loss_fn(
+            sampling_logprobs_list=[[0.0, 0.0]],
+            advantages_list=[[1.0, 0.0]],
+            reference_logprobs_list=[[0.0, 0.0]],
+            kl_coef=0.0,
+        )
+
+        loss, metrics = loss_fn([object()], [torch.tensor([0.0, 0.0])])
+
+        self.assertAlmostEqual(float(loss.item()), -1.0)
+        self.assertAlmostEqual(metrics["loss_mean"], -0.5)
+        self.assertNotIn("opsd/coef", metrics)
+
+    def test_opsd_loss_adds_masked_auxiliary_metrics(self) -> None:
+        import torch
+
+        loss_fn = make_grpo_kl_loss_fn(
+            sampling_logprobs_list=[[0.0, 0.0]],
+            advantages_list=[[0.0, 0.0]],
+            kl_coef=0.0,
+            opsd_coef=0.5,
+            opsd_logprobs_list=[[-0.5, -0.1]],
+            opsd_mask_list=[[1.0, 0.0]],
+        )
+
+        loss, metrics = loss_fn([object()], [torch.tensor([-0.2, -0.8])])
+
+        self.assertAlmostEqual(float(loss.item()), 0.1, places=6)
+        self.assertEqual(metrics["opsd/masked_tokens"], 1.0)
+        self.assertEqual(metrics["opsd/mask_rate"], 0.5)
+        self.assertAlmostEqual(metrics["opsd/loss_mean"], 0.2, places=6)
+        self.assertAlmostEqual(metrics["opsd/teacher_logprob_mean"], -0.5, places=6)
+        self.assertAlmostEqual(metrics["opsd/student_teacher_gap_mean"], 0.3, places=6)
+
+    def test_opsd_helpers_require_present_metadata(self) -> None:
+        trajectory = Trajectory(
+            example=SearchExample("q-opsd-meta", "Question?", ["A"], "test"),
+            group_index=0,
+            messages=[],
+            advantage=1.0,
+            turns=[AssistantTurn([1], [2], [0.1], "a")],
+        )
+        datum = build_datum(trajectory)
+
+        with self.assertRaisesRegex(ValueError, "teacher logprobs"):
+            opsd_logprob_float_lists([datum])
+        self.assertEqual(opsd_mask_float_lists([datum]), [[0.0]])
+
     def test_add_reference_logprobs_and_custom_forward_datums(self) -> None:
         trajectory = Trajectory(
             example=SearchExample("q-custom", "Question?", ["A"], "test"),
@@ -648,6 +829,40 @@ class TrainingRolloutTest(unittest.TestCase):
 
         self.assertEqual(datums[0].reference_logprobs, [-0.02])
         self.assertEqual(set(custom[0].loss_fn_inputs.keys()), {"target_tokens"})
+
+    def test_train_pytrio_opsd_cli_defaults_and_overrides(self) -> None:
+        from scripts import train_pytrio
+
+        with patch("sys.argv", ["train_pytrio.py", "--max-steps", "1"]):
+            defaults = train_pytrio.parse_args()
+        self.assertEqual(defaults.opsd_coef, 0.0)
+        self.assertEqual(defaults.opsd_context_policy, "same_context")
+        self.assertEqual(defaults.opsd_mask_policy, "credited_turns")
+        self.assertEqual(defaults.opsd_positive_policy, "positive_advantage")
+        self.assertIsNone(defaults.opsd_min_teacher_logprob)
+
+        with patch(
+            "sys.argv",
+            [
+                "train_pytrio.py",
+                "--max-steps",
+                "1",
+                "--opsd-coef",
+                "0.05",
+                "--opsd-mask-policy",
+                "final_answer",
+                "--opsd-positive-policy",
+                "exact_match",
+                "--opsd-min-teacher-logprob",
+                "-4.0",
+            ],
+        ):
+            overrides = train_pytrio.parse_args()
+        self.assertEqual(overrides.opsd_coef, 0.05)
+        self.assertEqual(overrides.opsd_mask_policy, "final_answer")
+        self.assertEqual(overrides.opsd_positive_policy, "exact_match")
+        self.assertEqual(overrides.opsd_min_teacher_logprob, -4.0)
+
 
     def test_failure_wrapper_preserves_dispatch_backend_name(self) -> None:
         registry = build_registry(
@@ -1165,6 +1380,12 @@ class FakeReferenceClient:
         tokens = [int(token) for token in prompt.tolist()]
         self.requests.append(tokens)
         return FakeFuture([None, *[-float(token) / 100.0 for token in tokens[1:]]])
+
+
+class BadLengthReferenceClient:
+    def compute_logprobs(self, prompt: object) -> FakeFuture:
+        del prompt
+        return FakeFuture([None])
 
 
 class FakeTokenizer:

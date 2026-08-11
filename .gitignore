@@ -82,6 +82,10 @@ instance/
 # Sphinx documentation
 docs/_build/
 
+# Private notes kept locally only.
+docs/interview/
+docs/learning/
+
 # PyBuilder
 .pybuilder/
 target/

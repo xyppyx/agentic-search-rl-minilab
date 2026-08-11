@@ -30,7 +30,7 @@
 
 ## 2026-08-10
 
-- 按用户要求创建 `Backup` 分支，归档上游 `00-loss-function/`、`01-grpo/`、`02-opd/`、`03-search-r1/` 教学目录；`main` 聚焦 Robust Search-R1 MiniLab 自有实现和面试/实验文档。
+- 按用户要求创建 `Backup` 分支，归档上游 `00-loss-function/`、`01-grpo/`、`02-opd/`、`03-search-r1/` 教学目录；`main` 聚焦 Robust Search-R1 MiniLab 自有实现和公开项目文档。
 - 决策：后续若接 OPD/OPSD，不做 naive full-sequence distillation；只考虑 gated auxiliary objective，并让 GRPO/turn-level credit 继续作为主训练信号。
 - 状态维护决策：在 `docs/status/archive/2026-08-10_pre_cleanup/` 保存压缩前 status 快照；archive 只供历史追溯，不作为当前进度、TODO、基线或实验结论。当前状态仍只读取 `PROJECT_COMPLETED.md`、`PROJECT_TODO.md`、`PROJECT_LOG.md`。
 - 创建 OPSD 实验分支 `exp/gated-opsd`。按用户要求将状态压缩触发规则写入 `AGENTS.md` 与 `docs/AGENTS.md`，并分别提交到 `main` 与 `exp/gated-opsd`，后续切新主线、阶段完成、status 超过阈值或同一 active track 累计多个 run/retry 时先压缩 status 再继续推进。
@@ -47,4 +47,5 @@
 - 按用户要求重试 bridge150；PyTRIO 余额/计费状态恢复后，采用 15 条分片协议完成 `guardfix20-resume-opsd-v2-5step-20260811` 的 clean bridge150 full eval。首次 chunk 0-15 有 1 次 Zhihu 工具错误并被重跑替换，最终 150 条合并结果为 EM 0.5242、correct 87/150、format 0.9067、平均搜索 3.1400、tool failures 0。长期决策：强 checkpoint + OPSD v2 5-step 同时刷新 dev70 clean 与 bridge150 clean/patched 口径，但 format 仍需在 alias80 和 case review 中重点检查。
 - 按用户要求重训 20-step OPSD v2 做方差对照。新增结论：eval 分片不作为默认，只作为长评测显式 clean-chunk 协议；训练不能独立分片合并，只能 checkpoint resume。`guardfix20-resume-opsd-v2-20step-seed43-20260811` clean 训练完成，20 step 中 16 次有效 update、4 次 skipped，训练阶段 tool success rate 1.0。Dev70 clean 为 EM 0.4571、correct 32/70、format 1.0000；bridge150 clean 为 EM 0.5317、correct 81/150、format 0.8133、平均搜索 3.2533。长期决策：20-step 宏平均 bridge EM 略高，但 correct/format/search 综合弱于 5-step，不替代最终候选。
 - 按用户要求固定最终路线为 `turn-credit-final-hop-guardfix-20step-20260806 -> guardfix20-resume-opsd-v2-5step-20260811`，并整理公开训练参数。决策表述：guard-fix 20-step 是搜索策略基座，OPSD v2 5-step 是强 checkpoint 上的 gated conservative refinement；后续 alias80/second-seed 属于验证补充，不改变当前主路线。
-- 按用户要求更新面试与学习材料：新增 OPD/OPSD 基础笔记，统一一页纸讲稿、问答速查、STAR 项目经历和技术实现细节到最终路线口径。长期表达重点从“单个 guard-fix checkpoint”调整为“多轮尝试对比后，选择 guard-fix 20-step + OPSD v2 5-step，并能解释 5-step、gated objective、mask 与 patched/clean 指标边界”。
+- 按用户要求更新个人项目表达材料：新增 OPD/OPSD 基础笔记，统一一页纸讲稿、问答速查、STAR 项目经历和技术实现细节到最终路线口径。长期表达重点从“单个 guard-fix checkpoint”调整为“多轮尝试对比后，选择 guard-fix 20-step + OPSD v2 5-step，并能解释 5-step、gated objective、mask 与 patched/clean 指标边界”。
+- 按用户要求将个人项目表达材料从当前公开 `main` 树移出；不重写历史，只通过 `git rm --cached` 和 `.gitignore` 保留本地副本，避免 GitHub 首页和当前文件树展示相关目录。根 README 保留项目路线和实验结果，不再包含个人材料入口。

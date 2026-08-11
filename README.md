@@ -46,29 +46,27 @@ guard-fix 20-step final-hop turn credit
 
 截至 2026-08-11，公开状态文件中记录的核心对比如下：
 
-| 场景 | Prompt/Base | 最终路线 | 变化 |
-| --- | ---: | ---: | ---: |
-| `dev70` | prompt-only best EM 0.4143，format 0.8857 | OPSD v2 5-step clean EM 0.4857，correct 34/70，format 0.9857，avg search 1.7286 | EM +0.0714，format +0.1000 |
+| 场景                |                                                                  Prompt/Base |                                                                         最终路线 |                                    变化 |
+| ------------------- | ---------------------------------------------------------------------------: | -------------------------------------------------------------------------------: | --------------------------------------: |
+| `dev70`           |                                    prompt-only best EM 0.4143，format 0.8857 |  OPSD v2 5-step clean EM 0.4857，correct 34/70，format 0.9857，avg search 1.7286 |              EM +0.0714，format +0.1000 |
 | `bridge_eval_150` | prompt-only base EM 0.4750，correct 74/150，format 0.7200，avg search 3.3067 | OPSD v2 5-step clean EM 0.5242，correct 87/150，format 0.9067，avg search 3.1400 | EM +0.0492，correct +13，format +0.1867 |
 
 路线实验对比：
 
-| 路线 | dev70 | bridge_eval_150 | 结论 |
-| --- | ---: | ---: | --- |
-| prompt-only guard | EM 0.4143，format 0.8857 | EM 0.4750，correct 74/150，format 0.7200 | 强 prompt baseline，但策略学习有限 |
-| behavior penalty | 部分减少重复/空搜 | 未作为最终候选 | 简单 penalty 容易压掉必要 follow-up |
-| evidence-v2 20-step | EM 0.4429，format 1.0000，avg search 1.7714 | EM 0.4583，correct 81/150，format 0.9400，avg search 3.0933 | format 最强对照，但 EM/correct 不最高 |
-| guard-fix 20-step | EM 0.4571，correct 32/70，format 0.9571 | patched EM 0.5142，correct 83/150，format 0.8267 | final-hop credit 提升 EM/correct；bridge 结果需标注 patched protocol |
-| guardfix20 + OPSD v2 5-step | clean EM 0.4857，correct 34/70，format 0.9857 | clean EM 0.5242，correct 87/150，format 0.9067 | 当前最终路线，clean correct/format/search 综合最好 |
-| guardfix20 + OPSD v2 20-step seed43 | clean EM 0.4571，correct 32/70，format 1.0000 | clean EM 0.5317，correct 81/150，format 0.8133 | bridge EM macro 略高，但 correct/format/search 综合弱于 5-step |
-| alias/granularity base vs evidence-v2 | base EM 0.4500，evidence-v2 EM 0.4375 | 最终路线尚未评测 | 下一步补最终 checkpoint 的 alias80 |
+| 路线                                |                                         dev70 |                                             bridge_eval_150 | 结论                                                                 |
+| ----------------------------------- | --------------------------------------------: | ----------------------------------------------------------: | -------------------------------------------------------------------- |
+| prompt-only guard                   |                      EM 0.4143，format 0.8857 |                    EM 0.4750，correct 74/150，format 0.7200 | 强 prompt baseline，但策略学习有限                                   |
+| behavior penalty                    |                             部分减少重复/空搜 |                                              未作为最终候选 | 简单 penalty 容易压掉必要 follow-up                                  |
+| evidence-v2 20-step                 |   EM 0.4429，format 1.0000，avg search 1.7714 | EM 0.4583，correct 81/150，format 0.9400，avg search 3.0933 | format 最强对照，但 EM/correct 不最高                                |
+| guard-fix 20-step                   |       EM 0.4571，correct 32/70，format 0.9571 |            patched EM 0.5142，correct 83/150，format 0.8267 | final-hop credit 提升 EM/correct；bridge 结果需标注 patched protocol |
+| guardfix20 + OPSD v2 5-step         | clean EM 0.4857，correct 34/70，format 0.9857 |              clean EM 0.5242，correct 87/150，format 0.9067 | 当前最终路线，clean correct/format/search 综合最好                   |
+| guardfix20 + OPSD v2 20-step seed43 | clean EM 0.4571，correct 32/70，format 1.0000 |              clean EM 0.5317，correct 81/150，format 0.8133 | bridge EM macro 略高，但 correct/format/search 综合弱于 5-step       |
 
 重要边界：
 
 - `bridge_eval_150` 的最终路线结果来自 10 个 clean chunks 合并，150 条 trajectory 的 tool failures 为 0。
 - `bridge_eval_150` 的 guard-fix 20-step 历史结果按 patched protocol 展示，其中 3 条由工具错误样本 retry 补齐；该口径适合项目分析，但不等同论文式独立全量 success rate 1.0 run。
 - 真实 Zhihu Search API 会出现限流、url error、parse error 等外部失败；本项目要求把 tool failure 和模型策略失败分开记录。
-- 当前主要短板是最终路线尚未完成 `alias_granularity_eval_80`，bridge format 0.9067 仍低于 evidence-v2 20-step 的 0.9400，高分路线仍需 case review 解释 format/max-search no-answer。
 
 完整事实源见 [docs/status/PROJECT_COMPLETED.md](docs/status/PROJECT_COMPLETED.md) 和 [docs/status/PROJECT_TODO.md](docs/status/PROJECT_TODO.md)。
 
@@ -128,17 +126,12 @@ my-search-r1/
 docs/
   design/                 # 设计草案和 reward shaping 计划
   status/                 # 项目事实源：完成项、TODO、长期日志
-  interview/              # 实验复盘与面试速查
-  learning/               # RL / Agentic RL / 项目表达材料
 ```
 
 ## 文档入口
 
 - [my-search-r1/README.md](my-search-r1/README.md)：实现细节与脚本用法。
 - [docs/design/reward_shaping_plan.md](docs/design/reward_shaping_plan.md)：reward shaping 版本和实验决策。
-- [docs/interview/one_page_project_pitch.md](docs/interview/one_page_project_pitch.md)：最终路线的一页纸项目讲稿。
-- [docs/interview/interview_qa_quick_reference.md](docs/interview/interview_qa_quick_reference.md)：多种尝试、指标边界和 OPSD 追问速查。
-- [docs/learning/basic/rl/opd_opsd_interview_notes.md](docs/learning/basic/rl/opd_opsd_interview_notes.md)：OPD/OPSD、gated objective 和 mask 设计基础。
 
 ## 项目边界
 

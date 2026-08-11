@@ -8,7 +8,7 @@
 
 当前最重要结论：
 
-- 最终路线已固定为 `turn-credit-final-hop-guardfix-20step-20260806 -> guardfix20-resume-opsd-v2-5step-20260811`：先用 guard-fix 20-step 学 final-hop/bridge 搜索策略，再从其 final state 恢复做 OPSD v2 5-step gated conservative refinement。公开参数与选择理由见 `docs/interview/lesson/2026-08-11_final_route_guardfix20_opsd_v2_5step.md`。
+- 最终路线已固定为 `turn-credit-final-hop-guardfix-20step-20260806 -> guardfix20-resume-opsd-v2-5step-20260811`：先用 guard-fix 20-step 学 final-hop/bridge 搜索策略，再从其 final state 恢复做 OPSD v2 5-step gated conservative refinement。
 - `prompt_search_budget_guard` 是当前最强 prompt-only base：Zhihu dev70 EM 0.4143、format 0.8857。
 - `turn_credit_evidence_bridge_20step` 是当前最高 format checkpoint 证据：dev70 EM 0.4429、format 1.0000、平均搜索 1.7714；bridge150 EM 0.4583、correct 81/150、format 0.9400、平均搜索 3.0933。
 - `guardfix20-resume-opsd-v2-5step-20260811` 是当前最高 dev70 clean checkpoint：从 `turn-credit-final-hop-guardfix-20step-20260806` final state 恢复，使用 guardfix final weights 作为 KL/reference 与 OPSD teacher，dev70 EM 0.4857、correct 34/70、format 0.9857、平均搜索 1.7286、Zhihu success rate 1.0。
@@ -32,7 +32,7 @@
 - Gated OPSD v2 已完成实现与 local PyTRIO smoke：新增 `--opsd-positive-policy`，默认 `credited_turns + positive_advantage`，避免默认蒸馏 wrong-valid final answer；local nonzero-mask smoke 验证 OPSD teacher logprobs、custom backward 和 optimizer 路径可用。
 - `eval_pytrio.py` 已增加 `--offset` 数据选择参数，用于长评测被外部 sampling session 中断时做分片恢复；默认 `--offset 0` 保持原评测行为。
 - 最终路线公开训练参数已冻结：guard-fix 20-step 使用 `final_hop_bridge`、`evidence_search_turn_bonus=0.05`、`final_hop_search_turn_bonus=0.10`、`early_answer_turn_penalty=0.05`、`missing_final_hop_turn_penalty=0.08`、`final_answer_guard_turn_penalty=0.06`；OPSD v2 5-step 在其 final state 上恢复，使用 `opsd_coef=0.01`、`opsd_mask_policy=credited_turns`、`opsd_positive_policy=positive_advantage`、`opsd_min_teacher_logprob=-3.0`。
-- 公开展示材料已按最终路线更新：根 `README.md`、`docs/interview/one_page_project_pitch.md`、`docs/interview/interview_qa_quick_reference.md`、`docs/learning/project/project_experience_star.md` 和 `docs/learning/project/technical_implementation_details.md` 均切换到 guard-fix 20-step + OPSD v2 5-step 口径；新增 `docs/learning/basic/rl/opd_opsd_interview_notes.md` 解释 OPD/OPSD、gated objective、mask 和 5-step 选择理由。
+- 根 `README.md` 已按最终路线更新，展示 guard-fix 20-step + OPSD v2 5-step 路线、多路线结果对比和 clean/patched 指标边界；个人笔记材料已从当前公开树移出并由 `.gitignore` 保护。
 - 训练默认稳定化配置已切换为 standardized advantage、advantage clip 2.0、KL-style reference drift penalty 0.01、policy ratio clip 0.2、learning rate 1e-5；reward behavior penalty 默认仍关闭。
 - Reward shaping 已验证过多轮路线：简单 duplicate/empty/max-search penalty 能降低部分坏行为但可能损伤必要 follow-up；prompt/rollout 约束和 turn-level credit 更适合当前 Search-R1 MiniLab。
 - Zhihu backend 的 parse/url/rate-limit 等工具异常已进入 trajectory 与报告，项目评测规则要求模型策略问题和外部工具失败分开记录。
@@ -66,7 +66,7 @@
 - 2026-07-23：bridge150 与 alias80 targeted eval、parse error 可观测性修复、base vs 20-step case review。
 - 2026-08-05 至 2026-08-06：final-hop bridge guard、guard-fix、5-step/20-step 训练、dev70/bridge150 full 与 patched 评测。
 - 2026-08-06 至 2026-08-10：面向保研/实习简历的项目材料整理、Backup 分支归档上游教学目录、main 聚焦自有实现。
-- 2026-08-11：Gated OPSD v1 local smoke、Zhihu dev-5 health、5-step 真实训练、dev70 eval 与诊断完成；随后完成 OPSD v2 正向 gate 实现、local smoke、真实 5-step 训练、dev70 eval、用户指定的 v2 20-step 压力测试，以及从 guardfix-20step final state 恢复的 OPSD v2 5-step/20-step 对照。bridge150 经分片重试完成 clean full eval，并完成 20-step seed43 重训方差对照；最终路线固定为 guard-fix 20-step + OPSD v2 5-step。详见 `docs/interview/lesson/2026-08-11_gated_opsd_5step_train.md`、`docs/interview/lesson/2026-08-11_gated_opsd_v2_implementation.md`、`docs/interview/lesson/2026-08-11_gated_opsd_v2_5step_train.md`、`docs/interview/lesson/2026-08-11_gated_opsd_v2_20step_train.md`、`docs/interview/lesson/2026-08-11_guardfix20_resume_opsd_v2_train.md`、`docs/interview/lesson/2026-08-11_guardfix20_resume_opsd_v2_bridge150_attempt.md`、`docs/interview/lesson/2026-08-11_guardfix20_resume_opsd_v2_20step_seed43.md` 和 `docs/interview/lesson/2026-08-11_final_route_guardfix20_opsd_v2_5step.md`。
+- 2026-08-11：Gated OPSD v1 local smoke、Zhihu dev-5 health、5-step 真实训练、dev70 eval 与诊断完成；随后完成 OPSD v2 正向 gate 实现、local smoke、真实 5-step 训练、dev70 eval、用户指定的 v2 20-step 压力测试，以及从 guardfix-20step final state 恢复的 OPSD v2 5-step/20-step 对照。bridge150 经分片重试完成 clean full eval，并完成 20-step seed43 重训方差对照；最终路线固定为 guard-fix 20-step + OPSD v2 5-step。
 
 ## 公开边界
 

@@ -24,7 +24,34 @@ guard-fix 20-step final-hop turn credit
 - PyTRIO GRPO 链路：支持 train/eval CLI、group rollout、reference logprob、ratio clip、advantage standardization 和 KL-style drift penalty。
 - Gated OPSD v2：支持 `--opsd-coef`、`--opsd-mask-policy`、`--opsd-positive-policy` 和 teacher logprob 对齐，用作 GRPO 之外的小系数辅助目标。
 - 诊断与复盘：支持 offline diagnostics、reward sensitivity、turn-credit analysis、checkpoint 对比和 gained/lost case review。
-- 定向评测集：构建 `dev70`、`bridge_eval_150`、`alias_granularity_eval_80`，分开记录模型策略问题和真实搜索工具失败。
+- 数据与评测集：准备 `train.jsonl`、`dev.jsonl`、`test.jsonl` 和 `bridge_eval_150.jsonl`，分开记录模型策略问题和真实搜索工具失败。
+
+## 数据与评测集
+
+数据采用 Search-R1 风格 JSONL，每条样本包含：
+
+```json
+{"id": "...", "question": "...", "answers": ["..."], "data_source": "..."}
+```
+
+本地数据目录 `my-search-r1/datasets/` 被 `.gitignore` 忽略，公开仓库不提交完整训练/评测数据文件。数据准备入口：
+
+```bash
+PYTHONPATH=my-search-r1 uv run python my-search-r1/scripts/prepare_data.py
+```
+
+当前使用的数据与评测集：
+
+| 文件 | 规模 | 用途 |
+| --- | ---: | --- |
+| `my-search-r1/datasets/train.jsonl` | 169,615 | PyTRIO GRPO/OPSD 训练采样池 |
+| `my-search-r1/datasets/dev.jsonl` | 70 | 小预算 checkpoint 选择、health/eval 和路线快速对照 |
+| `my-search-r1/datasets/test.jsonl` | 51,713 | 保留评测集与 targeted eval 候选池 |
+| `my-search-r1/datasets/bridge_eval_150.jsonl` | 150 | 多跳 bridge/final-hop 搜索能力 targeted eval |
+
+`dev.jsonl` 按 data source 均衡抽样，每类 10 条，共 70 条；`bridge_eval_150.jsonl` 由 `my-search-r1/scripts/build_targeted_eval_sets.py` 从 dev/test/train 候选池中按 multi-hop source 和 bridge cue 规则筛出，重点测试 bridge entity、final-hop attribute、role binding 和 follow-up search。
+
+评测报告统一记录 EM/correct、format、平均搜索次数、tool failures、tool success rate 和失败类型。真实搜索 full run 的 tool success rate 低于 1.0 时，不进入正式结果表；patched protocol 会单独标注。
 
 ## 方法迭代
 
@@ -131,7 +158,9 @@ docs/
 ## 文档入口
 
 - [my-search-r1/README.md](my-search-r1/README.md)：实现细节与脚本用法。
-- [docs/design/reward_shaping_plan.md](docs/design/reward_shaping_plan.md)：reward shaping 版本和实验决策。
+- [docs/design/idea.md](docs/design/idea.md)：公开版系统设计概览。
+- [docs/design/reward_shaping_plan.md](docs/design/reward_shaping_plan.md)：公开版 reward 与辅助目标设计原则。
+- [docs/design/evaluation_design.md](docs/design/evaluation_design.md)：公开版 dev70 与 bridge150 评测设计。
 
 ## 项目边界
 

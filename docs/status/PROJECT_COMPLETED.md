@@ -33,6 +33,7 @@
 - `eval_pytrio.py` 已增加 `--offset` 数据选择参数，用于长评测被外部 sampling session 中断时做分片恢复；默认 `--offset 0` 保持原评测行为。
 - 最终路线公开训练参数已冻结：guard-fix 20-step 使用 `final_hop_bridge`、`evidence_search_turn_bonus=0.05`、`final_hop_search_turn_bonus=0.10`、`early_answer_turn_penalty=0.05`、`missing_final_hop_turn_penalty=0.08`、`final_answer_guard_turn_penalty=0.06`；OPSD v2 5-step 在其 final state 上恢复，使用 `opsd_coef=0.01`、`opsd_mask_policy=credited_turns`、`opsd_positive_policy=positive_advantage`、`opsd_min_teacher_logprob=-3.0`。
 - 根 `README.md` 已按最终路线更新，展示 guard-fix 20-step + OPSD v2 5-step 路线、多路线结果对比和 clean/patched 指标边界；个人笔记材料已从当前公开树移出并由 `.gitignore` 保护。
+- 公开设计文档已按最终迭代路线收敛为上层设计：`docs/design/idea.md` 记录系统设计概览，`docs/design/reward_shaping_plan.md` 记录 reward/辅助目标设计原则，`docs/design/evaluation_design.md` 记录 dev70/bridge150 公开评测设计；具体 prompt、reward 权重、训练参数、checkpoint 和 case review 细节已迁到本地私有材料；根 `README.md` 已补充 train/dev/test/bridge150 的数据与评测集说明。
 - 训练默认稳定化配置已切换为 standardized advantage、advantage clip 2.0、KL-style reference drift penalty 0.01、policy ratio clip 0.2、learning rate 1e-5；reward behavior penalty 默认仍关闭。
 - Reward shaping 已验证过多轮路线：简单 duplicate/empty/max-search penalty 能降低部分坏行为但可能损伤必要 follow-up；prompt/rollout 约束和 turn-level credit 更适合当前 Search-R1 MiniLab。
 - Zhihu backend 的 parse/url/rate-limit 等工具异常已进入 trajectory 与报告，项目评测规则要求模型策略问题和外部工具失败分开记录。

@@ -654,6 +654,68 @@ class TrainingRolloutTest(unittest.TestCase):
         )
         self.assertEqual(datum.opsd_mask, [1.0, 1.0, 0.0, 0.0, 1.0])
 
+    def test_opsd_positive_advantage_gate_excludes_negative_final_answer(self) -> None:
+        trajectory = Trajectory(
+            example=SearchExample("q-opsd-positive", "Question?", ["A"], "test"),
+            group_index=0,
+            messages=[],
+            reward=0.0,
+            advantage=-1.0,
+            exact_match=False,
+            valid_format=True,
+            events=[
+                {"role": "assistant", "parsed_kind": "tool", "tool_call": {"query": "q"}},
+                {"role": "tool", "observation": "obs"},
+                {"role": "assistant", "parsed_kind": "answer"},
+            ],
+            turns=[
+                AssistantTurn([10], [20, 21], [0.1, 0.2], "search"),
+                AssistantTurn([10, 20, 21, 30, 31], [40], [0.3], "Answer: B"),
+            ],
+        )
+        trajectory.turns[0].credit_label = "evidence_bridge_search"
+        trajectory.turns[0].effective_advantage = 0.05
+
+        datum = build_datum(
+            trajectory,
+            opsd_mask_policy="final_and_credited",
+            opsd_positive_policy="positive_advantage",
+        )
+
+        self.assertEqual(
+            datum.datum.loss_fn_inputs["target_tokens"].to_numpy().tolist(),
+            [20, 21, 30, 31, 40],
+        )
+        self.assertEqual(datum.opsd_mask, [1.0, 1.0, 0.0, 0.0, 0.0])
+
+    def test_opsd_exact_match_gate_requires_correct_trajectory(self) -> None:
+        trajectory = Trajectory(
+            example=SearchExample("q-opsd-exact", "Question?", ["A"], "test"),
+            group_index=0,
+            messages=[],
+            reward=0.0,
+            advantage=1.0,
+            exact_match=False,
+            valid_format=True,
+            events=[{"role": "assistant", "parsed_kind": "answer"}],
+            turns=[AssistantTurn([10], [20, 21], [0.1, 0.2], "Answer: B")],
+        )
+
+        wrong = build_datum(
+            trajectory,
+            opsd_mask_policy="final_answer",
+            opsd_positive_policy="exact_match",
+        )
+        trajectory.exact_match = True
+        correct = build_datum(
+            trajectory,
+            opsd_mask_policy="final_answer",
+            opsd_positive_policy="exact_match",
+        )
+
+        self.assertEqual(wrong.opsd_mask, [0.0, 0.0])
+        self.assertEqual(correct.opsd_mask, [1.0, 1.0])
+
     def test_reference_logprobs_align_to_shifted_targets(self) -> None:
         trajectory = Trajectory(
             example=SearchExample("q-kl", "Question?", ["A"], "test"),
@@ -775,7 +837,8 @@ class TrainingRolloutTest(unittest.TestCase):
             defaults = train_pytrio.parse_args()
         self.assertEqual(defaults.opsd_coef, 0.0)
         self.assertEqual(defaults.opsd_context_policy, "same_context")
-        self.assertEqual(defaults.opsd_mask_policy, "final_and_credited")
+        self.assertEqual(defaults.opsd_mask_policy, "credited_turns")
+        self.assertEqual(defaults.opsd_positive_policy, "positive_advantage")
         self.assertIsNone(defaults.opsd_min_teacher_logprob)
 
         with patch(
@@ -787,14 +850,17 @@ class TrainingRolloutTest(unittest.TestCase):
                 "--opsd-coef",
                 "0.05",
                 "--opsd-mask-policy",
-                "credited_turns",
+                "final_answer",
+                "--opsd-positive-policy",
+                "exact_match",
                 "--opsd-min-teacher-logprob",
                 "-4.0",
             ],
         ):
             overrides = train_pytrio.parse_args()
         self.assertEqual(overrides.opsd_coef, 0.05)
-        self.assertEqual(overrides.opsd_mask_policy, "credited_turns")
+        self.assertEqual(overrides.opsd_mask_policy, "final_answer")
+        self.assertEqual(overrides.opsd_positive_policy, "exact_match")
         self.assertEqual(overrides.opsd_min_teacher_logprob, -4.0)
 
 

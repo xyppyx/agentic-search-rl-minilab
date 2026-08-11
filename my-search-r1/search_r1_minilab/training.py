@@ -38,6 +38,12 @@ OPSD_MASK_POLICIES = {
     "credited_turns",
     "final_and_credited",
 }
+OPSD_POSITIVE_POLICIES = {
+    "all",
+    "positive_advantage",
+    "positive_reward",
+    "exact_match",
+}
 
 
 @dataclass(frozen=True)
@@ -78,7 +84,8 @@ class OPSDConfig:
 
     coef: float = 0.0
     context_policy: str = "same_context"
-    mask_policy: str = "final_and_credited"
+    mask_policy: str = "credited_turns"
+    positive_policy: str = "positive_advantage"
     min_teacher_logprob: float | None = None
 
     def __post_init__(self) -> None:
@@ -90,6 +97,11 @@ class OPSDConfig:
             raise ValueError(
                 "OPSD mask policy must be 'none', 'final_answer', "
                 "'credited_turns', or 'final_and_credited'"
+            )
+        if self.positive_policy not in OPSD_POSITIVE_POLICIES:
+            raise ValueError(
+                "OPSD positive policy must be 'all', 'positive_advantage', "
+                "'positive_reward', or 'exact_match'"
             )
 
 
@@ -116,12 +128,18 @@ def build_datum(
     trajectory: Trajectory,
     *,
     opsd_mask_policy: str = "none",
+    opsd_positive_policy: str = "all",
 ) -> TrainingDatum:
     """Convert one rollout trajectory into one PyTRIO training datum."""
     if opsd_mask_policy not in OPSD_MASK_POLICIES:
         raise ValueError(
             "OPSD mask policy must be 'none', 'final_answer', "
             "'credited_turns', or 'final_and_credited'"
+        )
+    if opsd_positive_policy not in OPSD_POSITIVE_POLICIES:
+        raise ValueError(
+            "OPSD positive policy must be 'all', 'positive_advantage', "
+            "'positive_reward', or 'exact_match'"
         )
     if not trajectory.turns:
         raise ValueError("cannot build a training datum without assistant turns")
@@ -147,17 +165,23 @@ def build_datum(
                 f"assistant turn {turn_index + 1} prompt is not a trajectory prefix"
             )
 
-        full_tokens.extend(delta_observation)
-        full_tokens.extend(turn.completion_tokens)
-        turn_opsd_mask = (
-            1.0
-            if _opsd_turn_selected(trajectory, turn_index, opsd_mask_policy)
-            else 0.0
-        )
         turn_advantage = (
             trajectory.advantage
             if turn.effective_advantage is None
             else turn.effective_advantage
+        )
+        full_tokens.extend(delta_observation)
+        full_tokens.extend(turn.completion_tokens)
+        turn_opsd_mask = (
+            1.0
+            if _opsd_turn_selected(
+                trajectory,
+                turn_index,
+                opsd_mask_policy,
+                positive_policy=opsd_positive_policy,
+                turn_advantage=turn_advantage,
+            )
+            else 0.0
         )
         old_logprobs_by_token.extend([0.0] * len(delta_observation))
         old_logprobs_by_token.extend(turn.logprobs)
@@ -209,13 +233,18 @@ def build_training_datums(
     turn_credit: TurnCreditConfig | None = None,
     *,
     opsd_mask_policy: str = "none",
+    opsd_positive_policy: str = "all",
 ) -> list[TrainingDatum]:
     """Build datums for trajectories with non-zero group-relative advantages."""
     apply_turn_credit(trajectories, turn_credit or TurnCreditConfig())
     datums: list[TrainingDatum] = []
     for trajectory in trajectories:
         if any(turn.completion_tokens for turn in trajectory.turns):
-            datum = build_datum(trajectory, opsd_mask_policy=opsd_mask_policy)
+            datum = build_datum(
+                trajectory,
+                opsd_mask_policy=opsd_mask_policy,
+                opsd_positive_policy=opsd_positive_policy,
+            )
             if datum_loss_token_count(datum) > 0:
                 datums.append(datum)
     return datums
@@ -515,6 +544,9 @@ def _opsd_turn_selected(
     trajectory: Trajectory,
     turn_index: int,
     policy: str,
+    *,
+    positive_policy: str,
+    turn_advantage: float,
 ) -> bool:
     if policy == "none":
         return False
@@ -522,12 +554,35 @@ def _opsd_turn_selected(
     credited = bool(turn.credit_label)
     final_answer = _is_final_answer_turn(trajectory.events, turn_index)
     if policy == "final_answer":
-        return final_answer
-    if policy == "credited_turns":
-        return credited
-    if policy == "final_and_credited":
-        return final_answer or credited
-    raise ValueError(f"unsupported OPSD mask policy: {policy}")
+        selected = final_answer
+    elif policy == "credited_turns":
+        selected = credited
+    elif policy == "final_and_credited":
+        selected = final_answer or credited
+    else:
+        raise ValueError(f"unsupported OPSD mask policy: {policy}")
+    return selected and _opsd_positive_gate(
+        trajectory,
+        positive_policy,
+        turn_advantage=turn_advantage,
+    )
+
+
+def _opsd_positive_gate(
+    trajectory: Trajectory,
+    policy: str,
+    *,
+    turn_advantage: float,
+) -> bool:
+    if policy == "all":
+        return True
+    if policy == "positive_advantage":
+        return turn_advantage > 0.0
+    if policy == "positive_reward":
+        return trajectory.reward > 0.0
+    if policy == "exact_match":
+        return trajectory.exact_match
+    raise ValueError(f"unsupported OPSD positive policy: {policy}")
 
 
 def _is_final_answer_turn(events: list[dict[str, Any]], turn_index: int) -> bool:

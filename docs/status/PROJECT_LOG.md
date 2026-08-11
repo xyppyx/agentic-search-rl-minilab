@@ -39,3 +39,4 @@
 
 - 完成 gated OPSD v1 真实 PyTRIO 训练与 dev70 有效评测；OPSD 工程链路跑通，但 `opsd_coef=0.05` 的 5-step 结果没有超过 turn-credit 主线。
 - 决策：不把 OPSD v1 扩到 bridge150 或 alias80；若继续 OPSD，只做更保守的 v2 单变量实验，优先降低系数或收窄 mask。
+- 完成 OPSD v2 正向 gate 实现：默认 `credited_turns + positive_advantage`，并保留 `all` 作为 v1 复现口径；local PyTRIO smoke 通过，下一步才进入真实 Zhihu 5-step。

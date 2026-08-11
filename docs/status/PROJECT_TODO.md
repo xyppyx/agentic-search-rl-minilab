@@ -22,7 +22,7 @@
 ### 3. Gated OPSD Auxiliary Loss
 
 - 验收条件：实现默认关闭的 `--opsd-coef`、`--opsd-context-policy`、`--opsd-mask-policy`；GRPO/turn-credit 仍为主 loss，OPSD 只作为小系数辅助项。
-- 当前状态：2026-08-11 已完成 `gated-opsd-guardfix-5step-20260811` 真实 Zhihu 5-step 训练；OPSD v1 训练链路可用，但 dev70 结果未超过当前 turn-credit 主线。
+- 当前状态：2026-08-11 已完成 `gated-opsd-guardfix-5step-20260811` 真实 Zhihu 5-step 训练；OPSD v1 训练链路可用，但 dev70 结果未超过当前 turn-credit 主线。随后已实现 OPSD v2：新增 `--opsd-positive-policy`，默认 `credited_turns + positive_advantage`，local PyTRIO smoke 已通过。
 - 推荐初始策略：只在 final-answer/turn-credit 命中 turn 上启用 OPSD，不做全序列蒸馏，不蒸馏 tool observation tokens。
 - 停止条件：naive full-sequence OPSD、gold answer teacher 诱导少搜/早答、或 distillation token 占比失控。
 
@@ -35,9 +35,10 @@
 
 ### 5. OPSD v2 Decision
 
-- 验收条件：决定是停放 OPSD，还是只做一个更保守 v2；若继续，需先明确相对 v1 的单变量变化和停止条件。
-- 推荐方向：优先考虑 `opsd_coef=0.01`、设置 `--opsd-min-teacher-logprob`，或把 mask 收窄到 final answer 中更短的 answer span；不要直接扩大 v1 到 20-step、bridge150 或 alias80。
-- 停止条件：dev70 format 低于 guard-fix 5-step、平均搜索继续上升、`missing_followup_query` 增加，或 OPSD mask/token 占比失控。
+- 验收条件：运行真实 Zhihu 5-step v2，确认训练阶段 tool success rate 1.0、OPSD mask 非零且不失控，再跑 dev70 小预算对照。
+- 当前状态：v2 代码与 local smoke 已完成；尚未运行真实 Zhihu v2 训练。
+- 推荐命令要点：`--opsd-coef 0.01 --opsd-mask-policy credited_turns --opsd-positive-policy positive_advantage --opsd-min-teacher-logprob -3.0`，其余参数沿用 guard-fix 5-step。
+- 停止条件：训练阶段 Zhihu success rate < 1.0、OPSD masked tokens 长期为 0、dev70 format 低于 guard-fix 5-step、平均搜索继续上升、`missing_followup_query` 增加，或 OPSD mask/token 占比失控。
 
 ## Parked Historical Tracks
 

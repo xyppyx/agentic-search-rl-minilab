@@ -30,6 +30,7 @@ from search_r1_minilab.training import (
     OPSDConfig,
     OPSD_CONTEXT_POLICIES,
     OPSD_MASK_POLICIES,
+    OPSD_POSITIVE_POLICIES,
     pack_micro_batches,
     pick_mean_loss_metric,
     rollout_metrics,
@@ -113,7 +114,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--opsd-mask-policy",
         choices=sorted(OPSD_MASK_POLICIES),
-        default="final_and_credited",
+        default="credited_turns",
+    )
+    parser.add_argument(
+        "--opsd-positive-policy",
+        choices=sorted(OPSD_POSITIVE_POLICIES),
+        default="positive_advantage",
     )
     parser.add_argument("--opsd-min-teacher-logprob", type=float)
     parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
@@ -187,6 +193,7 @@ def main(args: argparse.Namespace | None = None) -> None:
         coef=args.opsd_coef,
         context_policy=args.opsd_context_policy,
         mask_policy=args.opsd_mask_policy,
+        positive_policy=args.opsd_positive_policy,
         min_teacher_logprob=args.opsd_min_teacher_logprob,
     )
     adam_params = trio.AdamParams(
@@ -241,6 +248,11 @@ def main(args: argparse.Namespace | None = None) -> None:
                         opsd_config.mask_policy
                         if opsd_config.coef > 0.0
                         else "none"
+                    ),
+                    opsd_positive_policy=(
+                        opsd_config.positive_policy
+                        if opsd_config.coef > 0.0
+                        else "all"
                     ),
                 )
                 if args.kl_coef > 0.0 and reference_client is not None and datums:

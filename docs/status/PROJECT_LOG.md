@@ -34,3 +34,8 @@
 - 决策：后续若接 OPD/OPSD，不做 naive full-sequence distillation；只考虑 gated auxiliary objective，并让 GRPO/turn-level credit 继续作为主训练信号。
 - 状态维护决策：在 `docs/status/archive/2026-08-10_pre_cleanup/` 保存压缩前 status 快照；archive 只供历史追溯，不作为当前进度、TODO、基线或实验结论。当前状态仍只读取 `PROJECT_COMPLETED.md`、`PROJECT_TODO.md`、`PROJECT_LOG.md`。
 - 创建 OPSD 实验分支 `exp/gated-opsd`。按用户要求将状态压缩触发规则写入 `AGENTS.md` 与 `docs/AGENTS.md`，并分别提交到 `main` 与 `exp/gated-opsd`，后续切新主线、阶段完成、status 超过阈值或同一 active track 累计多个 run/retry 时先压缩 status 再继续推进。
+
+## 2026-08-11
+
+- 完成 gated OPSD v1 真实 PyTRIO 训练与 dev70 有效评测；OPSD 工程链路跑通，但 `opsd_coef=0.05` 的 5-step 结果没有超过 turn-credit 主线。
+- 决策：不把 OPSD v1 扩到 bridge150 或 alias80；若继续 OPSD，只做更保守的 v2 单变量实验，优先降低系数或收窄 mask。

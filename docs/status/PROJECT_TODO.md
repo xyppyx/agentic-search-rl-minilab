@@ -9,26 +9,35 @@
 ### 1. Freeze Pre-OPSD Baseline
 
 - 验收条件：明确后续 OPSD 对照使用的 baseline、checkpoint、评测集、参数和公开指标口径。
-- 当前建议：以 `prompt_search_budget_guard`、`turn_credit_evidence_bridge_20step`、`turn-credit-final-hop-guardfix-20step-20260806` 作为三类基线；bridge150 的 guard-fix 结果必须标注 patched protocol。
+- 当前状态：2026-08-11 已冻结 v1 对照口径；以 `prompt_search_budget_guard`、`turn_credit_evidence_bridge_20step`、`turn-credit-final-hop-guardfix-20step-20260806` 作为三类基线，bridge150 的 guard-fix 结果必须标注 patched protocol。
 - 停止条件：如果无法定位可用 sampler weights 或必要评测 JSONL，先补状态记录，不进入 OPSD 实现。
 
 ### 2. OPSD Feasibility Smoke
 
 - 验收条件：在 local/mock 小样本上验证 teacher/self-teacher logprob 能与 student rollout target tokens 对齐，并记录 token 数、mask 数、缺失 logprob 数和 loss 数值范围。
-- 技术方向：复用现有 `compute_reference_logprobs()`、`TrainingDatum`、custom loss 路径；新增 teacher context builder 和 OPSD mask。
+- 当前状态：2026-08-11 已完成 local BM25 1-step PyTRIO OPSD train smoke；`TrainingDatum`、shifted-target logprob 对齐、OPSD mask、custom loss metrics、reference logprobs、OPSD teacher logprobs、custom backward 和 checkpoint 路径均已跑通。
+- 技术方向：复用现有 `compute_reference_logprobs()`、`TrainingDatum`、custom loss 路径；v1 teacher context policy 固定为 `same_context`，不构造 gold-answer teacher。
 - 停止条件：teacher logprob 长度无法稳定对齐、tokenizer 不兼容、tool observation token 被错误纳入训练，或 smoke loss 出现 NaN/inf。
 
 ### 3. Gated OPSD Auxiliary Loss
 
 - 验收条件：实现默认关闭的 `--opsd-coef`、`--opsd-context-policy`、`--opsd-mask-policy`；GRPO/turn-credit 仍为主 loss，OPSD 只作为小系数辅助项。
-- 推荐初始策略：只在 final-answer/guard 命中 turn 上启用 OPSD，不做全序列蒸馏，不蒸馏 tool observation tokens。
+- 当前状态：2026-08-11 已完成 `gated-opsd-guardfix-5step-20260811` 真实 Zhihu 5-step 训练；OPSD v1 训练链路可用，但 dev70 结果未超过当前 turn-credit 主线。
+- 推荐初始策略：只在 final-answer/turn-credit 命中 turn 上启用 OPSD，不做全序列蒸馏，不蒸馏 tool observation tokens。
 - 停止条件：naive full-sequence OPSD、gold answer teacher 诱导少搜/早答、或 distillation token 占比失控。
 
 ### 4. Evaluation Ladder
 
 - 验收条件：依次完成 local BM25 1-step smoke、Zhihu dev-5 health、dev70 小预算对照；只有 dev70 不明显退化时才考虑 bridge150 或 alias80。
+- 当前状态：2026-08-11 OPSD v1 evaluation ladder 已完成；local smoke、Zhihu dev-5 health、5-step train、训练后 dev-5 和 dev70 均完成且工具 success rate 为 1.0。Dev70 EM 0.4286、format 0.9286、平均搜索 1.9143，相对 guard-fix 5-step EM 持平但 format/search 退化，因此不进入 bridge150 或 alias80。
 - 关键指标：EM、correct、format、平均搜索、`missing_followup_query`、`bad_max_search_loop`、tool success rate、OPSD mask 命中率、teacher-student logprob gap。
 - 停止条件：Zhihu API 出现 429、timeout、credential/http error、`tool_failures > 0` 或 success rate < 1.0；PyTRIO sampling await 超过 2 分钟无进度；OPSD 明显降低 format 或增加 missing follow-up。
+
+### 5. OPSD v2 Decision
+
+- 验收条件：决定是停放 OPSD，还是只做一个更保守 v2；若继续，需先明确相对 v1 的单变量变化和停止条件。
+- 推荐方向：优先考虑 `opsd_coef=0.01`、设置 `--opsd-min-teacher-logprob`，或把 mask 收窄到 final answer 中更短的 answer span；不要直接扩大 v1 到 20-step、bridge150 或 alias80。
+- 停止条件：dev70 format 低于 guard-fix 5-step、平均搜索继续上升、`missing_followup_query` 增加，或 OPSD mask/token 占比失控。
 
 ## Parked Historical Tracks
 

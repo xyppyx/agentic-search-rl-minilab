@@ -8,6 +8,7 @@
 
 当前最重要结论：
 
+- 早期“面向不可靠搜索工具/故障注入鲁棒训练”的 idea 已暂时搁置；当前正式主线聚焦多跳搜索策略、turn-level credit、gated OPSD 和 clean 评测口径。failure injection 继续保留为工具层 smoke、回归测试和评测边界验证能力，不作为当前算法贡献主卖点。
 - 最终路线已固定为 `turn-credit-final-hop-guardfix-20step-20260806 -> guardfix20-resume-opsd-v2-5step-20260811`：先用 guard-fix 20-step 学 final-hop/bridge 搜索策略，再从其 final state 恢复做 OPSD v2 5-step gated conservative refinement。
 - `prompt_search_budget_guard` 是当前最强 prompt-only base：Zhihu dev70 EM 0.4143、format 0.8857。
 - `turn_credit_evidence_bridge_20step` 是当前最高 format checkpoint 证据：dev70 EM 0.4429、format 1.0000、平均搜索 1.7714；bridge150 EM 0.4583、correct 81/150、format 0.9400、平均搜索 3.0933。
@@ -25,7 +26,7 @@
 
 ## 已验证核心能力
 
-- 统一搜索工具层已完成，支持 `mock_search`、`local_bm25`、`zhihu_search`、多 key 解析、错误脱敏、failure injection 和 backend registry。
+- 统一搜索工具层已完成，支持 `mock_search`、`local_bm25`、`zhihu_search`、多 key 解析、错误脱敏、failure injection 和 backend registry；其中 failure injection 当前定位为测试/诊断能力。
 - trajectory JSONL 与 Markdown report 已完成，支持正确/错误/格式错误/工具失败/重复搜索/行为 bucket/group comparison 等复盘视图。
 - Search-R1 rollout、PyTRIO train/eval CLI、数据准备、checkpoint 分析、offline diagnostics、reward sensitivity、turn-credit analysis 和 gained/lost case review 已完成。
 - Gated OPSD v1 已完成实现和真实训练验证，支持 `--opsd-coef`、`--opsd-context-policy same_context`、`--opsd-mask-policy final_and_credited`、teacher logprob 对齐、OPSD mask 指标和 custom loss metrics。
@@ -37,6 +38,7 @@
 - 训练默认稳定化配置已切换为 standardized advantage、advantage clip 2.0、KL-style reference drift penalty 0.01、policy ratio clip 0.2、learning rate 1e-5；reward behavior penalty 默认仍关闭。
 - Reward shaping 已验证过多轮路线：简单 duplicate/empty/max-search penalty 能降低部分坏行为但可能损伤必要 follow-up；prompt/rollout 约束和 turn-level credit 更适合当前 Search-R1 MiniLab。
 - Zhihu backend 的 parse/url/rate-limit 等工具异常已进入 trajectory 与报告，项目评测规则要求模型策略问题和外部工具失败分开记录。
+- 2026-08-12 新增 SITP 科研经历包装材料 `docs/interview/sitp_research_experience.md`，包含项目背景、研究目标、个人贡献、关键结果、简历写法、2 分钟讲稿、追问口径和公开边界；已在 `docs/interview/README.md` 建立入口。
 
 ## 当前 Baseline 表
 

@@ -9,9 +9,11 @@
 - 最终答案 reward 太稀疏，无法解释哪一次 search action 有用。
 - 多跳问题需要 bridge entity 和 final-hop attribute 两类关键搜索。
 - 简单惩罚搜索次数会同时压掉无效搜索和必要 follow-up。
-- 真实工具失败会污染 reward，必须与模型策略失败分开。
+- 真实工具失败会污染 reward 和评测，需要与模型策略失败分开；当前不把故障工具适应作为主训练目标。
 
 因此本项目的 reward 路线从“最终答案 reward + 行为惩罚”逐步转向“turn-level credit + gated auxiliary objective”。
+
+路线边界：早期 failure injection / 不可靠工具鲁棒性 idea 已暂时搁置。后续 reward 与辅助目标主要服务多跳搜索策略、final-hop follow-up 和停止策略；工具失败只作为过滤、诊断和边界记录。
 
 ## 路线阶段
 

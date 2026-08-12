@@ -50,3 +50,7 @@
 - 按用户要求更新个人项目表达材料：新增 OPD/OPSD 基础笔记，统一一页纸讲稿、问答速查、STAR 项目经历和技术实现细节到最终路线口径。长期表达重点从“单个 guard-fix checkpoint”调整为“多轮尝试对比后，选择 guard-fix 20-step + OPSD v2 5-step，并能解释 5-step、gated objective、mask 与 patched/clean 指标边界”。
 - 按用户要求将个人项目表达材料从当前公开 `main` 树移出；不重写历史，只通过 `git rm --cached` 和 `.gitignore` 保留本地副本，避免 GitHub 首页和当前文件树展示相关目录。根 README 保留项目路线和实验结果，不再包含个人材料入口。
 - 按用户要求更新公开设计与 README 数据说明：`docs/design/` 从早期计划/旧 reward 流水账收敛为当前系统设计、reward/辅助目标原则和 dev70/bridge150 评测设计；公开设计只保留上层路线，具体 prompt、reward 权重、训练参数、checkpoint 和 case review 细节迁入本地私有材料。根 README 新增 train/dev/test/bridge150 数据与评测集说明，且不展示未进入当前主线的数据集。
+
+## 2026-08-12
+
+- 明确项目定位调整：早期“面向不可靠搜索工具/故障注入鲁棒训练”的 idea 已暂时搁置。后续对外表达和当前事实源不再把它作为主线标题或算法卖点；failure injection 和 tool failure 统计保留为 smoke、回归测试、评测可信度和 clean/patched 边界说明。当前主线表述收敛为“面向多跳问答/真实搜索环境的搜索型 LLM Agent 强化学习训练与评测框架”。

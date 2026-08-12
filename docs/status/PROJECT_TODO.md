@@ -50,6 +50,7 @@
 
 ## Parked Historical Tracks
 
+- 早期“面向不可靠搜索工具/故障注入鲁棒训练”方向已暂时搁置。保留 failure injection、tool failure 记录和 patched/clean 边界是为了 smoke、回归测试和评测可信度；后续不把“训练模型适应失败工具”作为当前主线验收目标。
 - Reward penalty v1/v2/v3/v4、max-search penalty、follow-up bonus、no-search guard 等旧 ablation 暂停，不再作为活跃 TODO。
 - KL/std 单因素消融优先级下调；当前默认训练配置继续保留 KL/std 稳定化组合。
 - Evidence-v2 50-step 和 guard-fix 独立 full bridge150 可作为后续严谨评测补充，但不是 gated OPSD 前置条件。

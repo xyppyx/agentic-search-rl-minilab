@@ -2,7 +2,7 @@
 
 面向搜索型 LLM Agent 的训练、评测与轨迹诊断实验框架。
 
-本项目基于原作者 [`KMnO4-zx/llm-agent-rl-lab`](https://github.com/KMnO4-zx/llm-agent-rl-lab) 的教学复现仓库做个人二次开发，当前主线是把“模型主动搜索 - 读取 observation - 继续 follow-up - 输出短答案”的链路，改造成可观测、可诊断、可复盘的小型 Agentic RL 研究框架。
+本项目基于原作者 [`KMnO4-zx/llm-agent-rl-lab`](https://github.com/KMnO4-zx/llm-agent-rl-lab) 的教学复现仓库做个人二次开发，当前主线是把“模型主动搜索 - 读取 observation - 继续 follow-up - 输出短答案”的链路，改造成可观测、可诊断、可复盘的小型 Agentic RL 研究框架。早期关于“不可靠搜索工具/故障注入鲁棒训练”的设想已暂时搁置；当前正式路线聚焦多跳搜索策略、turn-level credit、gated OPSD 和 clean 评测口径，工具失败记录只用于隔离外部环境污染。
 
 截至 2026-08-11，最终实验路线固定为：
 
@@ -19,12 +19,12 @@ guard-fix 20-step final-hop turn credit
 
 已经完成的核心能力：
 
-- 统一搜索工具层：支持 `mock_search`、`local_bm25`、`zhihu_search` 和 failure injection。
+- 统一搜索工具层：支持 `mock_search`、`local_bm25`、`zhihu_search` 和用于 smoke/回归的 failure injection。
 - 训练与评测轨迹：保存完整 trajectory JSONL，并生成 Markdown report。
 - PyTRIO GRPO 链路：支持 train/eval CLI、group rollout、reference logprob、ratio clip、advantage standardization 和 KL-style drift penalty。
 - Gated OPSD v2：支持 `--opsd-coef`、`--opsd-mask-policy`、`--opsd-positive-policy` 和 teacher logprob 对齐，用作 GRPO 之外的小系数辅助目标。
 - 诊断与复盘：支持 offline diagnostics、reward sensitivity、turn-credit analysis、checkpoint 对比和 gained/lost case review。
-- 数据与评测集：准备 `train.jsonl`、`dev.jsonl`、`test.jsonl` 和 `bridge_eval_150.jsonl`，分开记录模型策略问题和真实搜索工具失败。
+- 数据与评测集：准备 `train.jsonl`、`dev.jsonl`、`test.jsonl` 和 `bridge_eval_150.jsonl`，分开记录模型策略问题和真实搜索工具失败；正式效果表只采用 clean 或显式标注的 patched 口径。
 
 ## 数据与评测集
 
@@ -51,7 +51,7 @@ PYTHONPATH=my-search-r1 uv run python my-search-r1/scripts/prepare_data.py
 
 `dev.jsonl` 按 data source 均衡抽样，每类 10 条，共 70 条；`bridge_eval_150.jsonl` 由 `my-search-r1/scripts/build_targeted_eval_sets.py` 从 dev/test/train 候选池中按 multi-hop source 和 bridge cue 规则筛出，重点测试 bridge entity、final-hop attribute、role binding 和 follow-up search。
 
-评测报告统一记录 EM/correct、format、平均搜索次数、tool failures、tool success rate 和失败类型。真实搜索 full run 的 tool success rate 低于 1.0 时，不进入正式结果表；patched protocol 会单独标注。
+评测报告统一记录 EM/correct、format、平均搜索次数、tool failures、tool success rate 和失败类型。这里记录工具失败是为了排除外部 API 波动对模型效果的污染，不表示当前主线在训练模型适应故障工具。真实搜索 full run 的 tool success rate 低于 1.0 时，不进入正式结果表；patched protocol 会单独标注。
 
 ## 方法迭代
 

@@ -9,7 +9,7 @@
 
 ## 项目背景
 
-本项目基于原作者 `KMnO4-zx/llm-agent-rl-lab` 的教学复现仓库，围绕 Search-R1、GRPO、OPD 等 LLM/Agent 强化学习方法做学习、复现和改造。当前个人项目主线是 `docs/design/idea.md` 中的 Robust Search-R1 MiniLab：在低成本、多工具、不可靠工具环境下，构建可控、可观测、可扩展的搜索型 Agentic RL 实验框架。
+本项目基于原作者 `KMnO4-zx/llm-agent-rl-lab` 的教学复现仓库，围绕 Search-R1、GRPO、OPD 等 LLM/Agent 强化学习方法做学习、复现和改造。当前个人项目主线是 `docs/design/idea.md` 中的 Robust Search-R1 MiniLab：在低成本、多 backend、真实搜索评测环境下，构建可控、可观测、可扩展的搜索型 Agentic RL 实验框架。早期“面向不可靠搜索工具/故障注入鲁棒训练”的 idea 已暂时搁置；当前 failure injection 只作为 smoke、回归测试和评测边界验证能力，不作为主算法卖点。
 
 上游教学复现目录 `00-loss-function/`、`01-grpo/`、`02-opd/`、`03-search-r1/` 已归档到 `Backup` 分支；`main` 只保留本项目自有实现、设计和复盘材料。改进实现默认放在 `my-search-r1/`，设计、复盘和长期记录放在 `docs/`。除非任务明确要求恢复或对照历史基线，不把备份分支中的既有教学能力包装为本项目新增成果。
 

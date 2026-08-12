@@ -26,7 +26,7 @@
 - `MockSearchBackend`：固定 fixture 查询，未知 query 返回空结果。
 - `ZhihuSearchBackend`：适配现有知乎全局搜索 API，支持多 key 解析、轮转、有限重试和错误脱敏。
 - `LocalBM25Backend`：读取本地 JSONL 小语料，使用轻量 BM25 做离线可复现检索。
-- `FailureWrapperBackend`：用固定 seed 对任意 backend 注入 timeout、empty_result、noisy_result、rate_limited。
+- `FailureWrapperBackend`：用固定 seed 对任意 backend 注入 timeout、empty_result、noisy_result、rate_limited；当前用于 smoke、回归和评测边界验证，不作为主线训练目标。
 - `ToolRegistry`：按 `tool_name` 分发调用，使 rollout 后续不直接依赖具体搜索 client。
 - `search_r1_minilab/trajectories/`：统一 trajectory JSONL 读写、分类统计和 Markdown 报告。
 - `search_r1_minilab/protocol.py`：Search-R1 chat template、工具调用解析和 tool message 构造。
@@ -34,7 +34,7 @@
 - `search_r1_minilab/rollout_smoke.py`：PyTRIO sampler + ToolRegistry 的最小 rollout/eval 状态机。
 - `search_r1_minilab/rollout.py`：训练级 group rollout，保存 old logprob、advantage 和可报告的 tool 事件。
 - `search_r1_minilab/training.py`：PyTRIO GRPO Datum 构建、micro-batch 装箱、advantage 权重缩放和训练指标。
-- `search_r1_minilab/tooling.py`：训练、评测和 smoke 共用的 backend 构造，支持 failure injection。
+- `search_r1_minilab/tooling.py`：训练、评测和 smoke 共用的 backend 构造，支持测试用 failure injection。
 - `search_r1_minilab/prepare_data.py`：固定 ModelScope 数据版本的 train/test/dev JSONL 准备逻辑。
 - `search_r1_minilab/analysis.py`：checkpoint eval JSONL 指标读取和 EM/format 曲线绘图。
 - `scripts/prepare_data.py`：下载并清洗 Search-R1 训练、测试和固定 dev 数据。
@@ -112,7 +112,7 @@ behavior penalty。需要复现旧式 GRPO 时显式传入
 训练和评测默认使用 `local_bm25`，可通过 `--backend mock_search` 或
 `--backend zhihu_search --env-file my-search-r1/.env` 切换。failure injection
 通过 `--p-timeout`、`--p-empty`、`--p-noise`、`--p-rate-limited` 和
-`--failure-seed` 控制。
+`--failure-seed` 控制；该能力当前仅用于工具协议 smoke、回归测试和评测边界验证。
 
 准备完整 Search-R1 数据：
 

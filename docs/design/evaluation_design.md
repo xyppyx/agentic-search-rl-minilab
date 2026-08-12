@@ -9,7 +9,7 @@ Search-R1 MiniLab 评测不只看最终答案是否正确，还要区分：
 - 输出协议是否稳定。
 - 模型是否主动搜索并做必要 follow-up。
 - 搜索动作是否真正服务于 final answer。
-- 外部工具是否失败、为空或污染 observation。
+- 外部工具是否失败、为空或污染 observation，并据此排除不 clean 的评测结果。
 - 训练是否诱导少搜、早答、重复搜索或搜满不答。
 
 因此当前采用两层评测：
@@ -60,6 +60,8 @@ Bridge150 不是无偏总体评估；它是压力测试集，用来回答“这�
 | Behavior diagnostics | 定位 early answer、missing follow-up、bad loop 等问题 |
 
 正式结果必须说明工具成功率边界。真实搜索失败的 run 不能和 clean run 混写；如果使用补救口径，需要单独标注。
+
+注意：工具失败记录是评测可信度约束，不是当前主算法目标。早期“面向不可靠搜索工具”的故障注入训练方向已暂时搁置；当前路线要求正式效果尽量来自 tool success rate 达标的 clean run。
 
 ## 与路线选择的关系
 

@@ -39,6 +39,7 @@
 - Reward shaping 已验证过多轮路线：简单 duplicate/empty/max-search penalty 能降低部分坏行为但可能损伤必要 follow-up；prompt/rollout 约束和 turn-level credit 更适合当前 Search-R1 MiniLab。
 - Zhihu backend 的 parse/url/rate-limit 等工具异常已进入 trajectory 与报告，项目评测规则要求模型策略问题和外部工具失败分开记录。
 - 2026-08-12 新增 SITP 科研经历包装材料 `docs/interview/sitp_research_experience.md`，包含项目背景、研究目标、个人贡献、关键结果、简历写法、2 分钟讲稿、追问口径和公开边界；已在 `docs/interview/README.md` 建立入口。
+- 2026-08-12 按用户要求删除根 `images/` 公开图片资产目录；当前根 README 不再引用该目录，根 `AGENTS.md` 的目录索引已同步移除。
 
 ## 当前 Baseline 表
 

@@ -11,7 +11,7 @@ guard-fix 20-step final-hop turn credit
   -> OPSD v2 5-step gated conservative refinement
 ```
 
-也就是先用 turn-level reward shaping 学 bridge/final-hop 搜索策略，再从该 checkpoint 恢复，用 `credited_turns + positive_advantage` 的 gated OPSD v2 做小步保守微调。最终 checkpoint 为 `guardfix20-resume-opsd-v2-5step-20260811`。
+训练使用的基础模型为 `Qwen/Qwen3.5-4B`。也就是先用 turn-level reward shaping 学 bridge/final-hop 搜索策略，再从该 checkpoint 恢复，用 `credited_turns + positive_advantage` 的 gated OPSD v2 做小步保守微调。最终 checkpoint 为 `guardfix20-resume-opsd-v2-5step-20260811`。
 
 核心实现位于 [my-search-r1/](my-search-r1/)。原 `00-loss-function/`、`01-grpo/`、`02-opd/`、`03-search-r1/` 四个教学目录已归档到 `Backup` 分支，`main` 只保留当前项目主线。
 
@@ -51,7 +51,7 @@ PYTHONPATH=my-search-r1 uv run python my-search-r1/scripts/prepare_data.py
 
 `dev.jsonl` 按 data source 均衡抽样，每类 10 条，共 70 条；`bridge_eval_150.jsonl` 由 `my-search-r1/scripts/build_targeted_eval_sets.py` 从 dev/test/train 候选池中按 multi-hop source 和 bridge cue 规则筛出，重点测试 bridge entity、final-hop attribute、role binding 和 follow-up search。
 
-评测报告统一记录 EM/correct、format、平均搜索次数、tool failures、tool success rate 和失败类型。这里记录工具失败是为了排除外部 API 波动对模型效果的污染，不表示当前主线在训练模型适应故障工具。真实搜索 full run 的 tool success rate 低于 1.0 时，不进入正式结果表；patched protocol 会单独标注。
+评测报告统一记录 EM macro、format、平均搜索次数、tool failures、tool success rate 和失败类型。这里记录工具失败是为了排除外部 API 波动对模型效果的污染，不表示当前主线在训练模型适应故障工具。真实搜索 full run 的 tool success rate 低于 1.0 时，不进入正式结果表；patched protocol 会单独标注。
 
 ## 方法迭代
 
@@ -75,19 +75,21 @@ PYTHONPATH=my-search-r1 uv run python my-search-r1/scripts/prepare_data.py
 
 | 场景                |                                                                  Prompt/Base |                                                                         最终路线 |                                    变化 |
 | ------------------- | ---------------------------------------------------------------------------: | -------------------------------------------------------------------------------: | --------------------------------------: |
-| `dev70`           |                                    prompt-only best EM 0.4143，format 0.8857 |  OPSD v2 5-step clean EM 0.4857，correct 34/70，format 0.9857，avg search 1.7286 |              EM +0.0714，format +0.1000 |
-| `bridge_eval_150` | prompt-only base EM 0.4750，correct 74/150，format 0.7200，avg search 3.3067 | OPSD v2 5-step clean EM 0.5242，correct 87/150，format 0.9067，avg search 3.1400 | EM +0.0492，correct +13，format +0.1867 |
+| `dev70`           |                                    prompt-only best EM 0.4143，format 0.8857 |               OPSD v2 5-step clean EM 0.4857，format 0.9857，avg search 1.7286 |              EM +0.0714，format +0.1000 |
+| `bridge_eval_150` |                   prompt-only base EM 0.4750，format 0.7200，avg search 3.3067 |              OPSD v2 5-step clean EM 0.5242，format 0.9067，avg search 3.1400 |              EM +0.0492，format +0.1867 |
+
+EM 口径：本文结果表中的 EM 均指 `em/macro`，即先按 `data_source` 分组计算 exact match，再对各组取平均；它不是逐样本总体准确率的 micro accuracy。
 
 路线实验对比：
 
 | 路线                                |                                         dev70 |                                             bridge_eval_150 | 结论                                                                 |
 | ----------------------------------- | --------------------------------------------: | ----------------------------------------------------------: | -------------------------------------------------------------------- |
-| prompt-only guard                   |                      EM 0.4143，format 0.8857 |                    EM 0.4750，correct 74/150，format 0.7200 | 强 prompt baseline，但策略学习有限                                   |
+| prompt-only guard                   |                      EM 0.4143，format 0.8857 |                                  EM 0.4750，format 0.7200 | 强 prompt baseline，但策略学习有限                                   |
 | behavior penalty                    |                             部分减少重复/空搜 |                                              未作为最终候选 | 简单 penalty 容易压掉必要 follow-up                                  |
-| evidence-v2 20-step                 |   EM 0.4429，format 1.0000，avg search 1.7714 | EM 0.4583，correct 81/150，format 0.9400，avg search 3.0933 | format 最强对照，但 EM/correct 不最高                                |
-| guard-fix 20-step                   |       EM 0.4571，correct 32/70，format 0.9571 |            patched EM 0.5142，correct 83/150，format 0.8267 | final-hop credit 提升 EM/correct；bridge 结果需标注 patched protocol |
-| guardfix20 + OPSD v2 5-step         | clean EM 0.4857，correct 34/70，format 0.9857 |              clean EM 0.5242，correct 87/150，format 0.9067 | 当前最终路线，clean correct/format/search 综合最好                   |
-| guardfix20 + OPSD v2 20-step seed43 | clean EM 0.4571，correct 32/70，format 1.0000 |              clean EM 0.5317，correct 81/150，format 0.8133 | bridge EM macro 略高，但 correct/format/search 综合弱于 5-step       |
+| evidence-v2 20-step                 |   EM 0.4429，format 1.0000，avg search 1.7714 |              EM 0.4583，format 0.9400，avg search 3.0933 | format 最强对照，但 EM 不最高                                       |
+| guard-fix 20-step                   |                  EM 0.4571，format 0.9571 |                         patched EM 0.5142，format 0.8267 | final-hop credit 提升 EM；bridge 结果需标注 patched protocol         |
+| guardfix20 + OPSD v2 5-step         |            clean EM 0.4857，format 0.9857 |                           clean EM 0.5242，format 0.9067 | 当前最终路线，clean EM/format/search 综合最好                        |
+| guardfix20 + OPSD v2 20-step seed43 |            clean EM 0.4571，format 1.0000 |                           clean EM 0.5317，format 0.8133 | bridge EM macro 略高，但 format/search 综合弱于 5-step               |
 
 重要边界：
 

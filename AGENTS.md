@@ -45,7 +45,6 @@
 
 - `my-search-r1/`：本项目 Search-R1 MiniLab 的正式改进实现目录。
 - `docs/`：设计文档、学习记录、状态事实源和实验复盘。
-- `images/`：根 README 使用的公开图片资产。
 - `.env`：本地及远程运行配置和敏感变量；`.env.example` 只保留可公开的键名与示例。
 - `Backup` 分支：归档上游教学复现目录 `00-loss-function/`、`01-grpo/`、`02-opd/`、`03-search-r1/`，用于历史参考和必要时恢复。
 

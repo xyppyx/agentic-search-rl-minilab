@@ -2,7 +2,7 @@
 
 面向搜索型 LLM Agent 的训练、评测与轨迹诊断实验框架。
 
-本项目基于原作者 [`KMnO4-zx/llm-agent-rl-lab`](https://github.com/KMnO4-zx/llm-agent-rl-lab) 的教学复现仓库做个人二次开发，当前主线是把“模型主动搜索 - 读取 observation - 继续 follow-up - 输出短答案”的链路，改造成可观测、可诊断、可复盘的小型 Agentic RL 研究框架。早期关于“不可靠搜索工具/故障注入鲁棒训练”的设想已暂时搁置；当前正式路线聚焦多跳搜索策略、turn-level credit、gated OPSD 和 clean 评测口径，工具失败记录只用于隔离外部环境污染。
+本项目基于原作者 [`KMnO4-zx/llm-agent-rl-lab`](https://github.com/KMnO4-zx/llm-agent-rl-lab) 的教学复现仓库做个人二次开发，当前主线是把“模型主动搜索 - 读取 observation - 继续 follow-up - 输出短答案”的链路，改造成可观测、可诊断、可复盘的小型 Agentic RL 研究框架。早期关于“不可靠搜索工具/故障注入鲁棒训练”的设想已暂时搁置；当前正式路线聚焦多跳搜索策略、turn-level credit、gated OPSD 和 clean 评测口径，工具失败记录只用于隔离外部环境污染。训练使用的基础模型为 `Qwen/Qwen3.5-4B`。
 
 截至 2026-08-11，最终实验路线固定为：
 
@@ -11,7 +11,7 @@ guard-fix 20-step final-hop turn credit
   -> OPSD v2 5-step gated conservative refinement
 ```
 
-训练使用的基础模型为 `Qwen/Qwen3.5-4B`。也就是先用 turn-level reward shaping 学 bridge/final-hop 搜索策略，再从该 checkpoint 恢复，用 `credited_turns + positive_advantage` 的 gated OPSD v2 做小步保守微调。最终 checkpoint 为 `guardfix20-resume-opsd-v2-5step-20260811`。
+也就是先用 turn-level reward shaping 学 bridge/final-hop 搜索策略，再从该 checkpoint 恢复，用 `credited_turns + positive_advantage` 的 gated OPSD v2 做小步保守微调。最终 checkpoint 为 `guardfix20-resume-opsd-v2-5step-20260811`。
 
 核心实现位于 [my-search-r1/](my-search-r1/)。原 `00-loss-function/`、`01-grpo/`、`02-opd/`、`03-search-r1/` 四个教学目录已归档到 `Backup` 分支，`main` 只保留当前项目主线。
 

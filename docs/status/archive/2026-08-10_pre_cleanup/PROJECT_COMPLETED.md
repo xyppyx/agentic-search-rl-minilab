@@ -188,7 +188,7 @@
 - Targeted bridge 与 alias/granularity eval 集已从现有 JSONL 离线构建。
   - 相关路径：`my-search-r1/scripts/build_targeted_eval_sets.py`、`my-search-r1/datasets/bridge_eval_150.jsonl`、`my-search-r1/datasets/alias_granularity_eval_80.jsonl`、`my-search-r1/datasets/targeted_eval_manifest.md`
   - 验证方式：运行 `PYTHONPATH=my-search-r1 uv run python my-search-r1/scripts/build_targeted_eval_sets.py --bridge-output my-search-r1/datasets/bridge_eval_150.jsonl --alias-output my-search-r1/datasets/alias_granularity_eval_80.jsonl --report-output my-search-r1/datasets/targeted_eval_manifest.md --bridge-size 150 --alias-size 80 --seed 20260722`。
-  - 关键结果：`bridge_eval_150.jsonl` 生成 150 条，来源为 2WikiMultihopQA 100、HotpotQA 30、Bamboogle 10、MuSiQue 10；`alias_granularity_eval_80.jsonl` 生成 80 条，来源为 2WikiMultihopQA/HotpotQA/NQ/PopQA/TriviaQA 各 16 条。该步骤只读已有 train/dev/test JSONL，不调用模型或搜索 API。
+  - 关键结果：`bridge_eval_150.jsonl` 生成 150 条，来源分布记录在当时 manifest 中；`alias_granularity_eval_80.jsonl` 生成 80 条，来源为 2WikiMultihopQA/HotpotQA/NQ/PopQA/TriviaQA 各 16 条。该步骤只读已有 train/dev/test JSONL，不调用模型或搜索 API。
 
 - Zhihu backend 已支持 `ZHIHU_API_KEY` 限流后自动切换 `ZHIHU_API_KEY2`。
   - 相关路径：`my-search-r1/search_r1_minilab/tools/zhihu.py`、`my-search-r1/tests/test_tools.py`、`my-search-r1/.env.example`

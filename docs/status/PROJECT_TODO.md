@@ -55,6 +55,7 @@
 - KL/std 单因素消融优先级下调；当前默认训练配置继续保留 KL/std 稳定化组合。
 - Evidence-v2 50-step 和 guard-fix 独立 full bridge150 可作为后续严谨评测补充，但不是 gated OPSD 前置条件。
 - `guardfix20-resume-opsd-v2-5step-20260811` 的 alias80 尚未评测；这是最终路线的下一步验证，不是路线选择前置条件。
+- `bridge_eval_350.jsonl` 已完成 base+prompt、guard-fix 20-step、最终 OPSD v2 5-step clean 三方对照。当前可支撑的公开口径是：最终路线在较明确多跳场景上相对 base 有效，guard-fix 20-step 提供中间增益，OPSD v2 5-step 在其上继续提升 format/EM/search efficiency。后续若要扩展泛化结论，应补失败 case review。
 
 ## 未解决风险
 

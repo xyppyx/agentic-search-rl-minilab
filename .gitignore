@@ -85,6 +85,7 @@ docs/_build/
 # Private notes kept locally only.
 docs/interview/
 docs/learning/
+docs/info/checkpoints.md
 
 # PyBuilder
 .pybuilder/

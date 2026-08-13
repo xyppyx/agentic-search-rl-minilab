@@ -4,7 +4,7 @@
 
 ## 项目定位
 
-Robust Search-R1 MiniLab 是一个面向搜索型 LLM Agent 的小预算 Agentic RL 实验框架。项目关注的不是单次分数，而是把以下链路做成可训练、可评测、可诊断的工程闭环：
+Robust Search-R1 MiniLab 是一个面向搜索型 LLM Agent 的小预算 Agentic RL 实验框架。当前更具体的应用导向是多跳搜索场景：模型需要先找到中间线索，再基于 observation 继续 follow-up，最后输出短答案。项目关注的不是单次分数，而是把以下链路做成可训练、可评测、可诊断的工程闭环：
 
 ```text
 question -> search action -> tool observation -> follow-up search -> final answer
@@ -48,7 +48,7 @@ turn-level search credit
 
 ## 数据与评测
 
-公开 README 只介绍当前主线需要的 train/dev/test/bridge150。评测集构造的公开说明见 [evaluation_design.md](evaluation_design.md)。
+公开 README 介绍当前主线需要的 train/dev/test，以及 bridge150、bridge_eval_350 等多跳 targeted eval。评测集构造的公开说明见 [evaluation_design.md](evaluation_design.md)。
 
 数据目录被 `.gitignore` 忽略，公开仓库不提交完整数据文件、真实评测 JSONL、模型权重或远程 checkpoint。
 
@@ -58,6 +58,8 @@ turn-level search credit
 
 1. Turn-level search credit：解决多跳搜索中的 credit assignment，让训练信号更接近“哪一次搜索有用”。
 2. Gated self-distillation refinement：在已有搜索策略基础上做保守辅助优化，避免把错误轨迹或工具 observation 蒸馏进模型。
+
+最新 `bridge_eval_350` 三方对照显示，base+prompt、GRPO guard-fix 20-step、GRPO+OPSD v2 5-step 在同一多跳评测集上呈递进改善。这支持当前项目导向：训练目标不是让模型盲目多搜，而是改善中间线索搜索、follow-up 和停止策略。
 
 公开文档只保留这一级设计。具体 reward 权重、mask 策略、训练参数和多轮实验表放在本地私有材料中。
 

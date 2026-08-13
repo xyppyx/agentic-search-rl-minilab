@@ -1,6 +1,6 @@
 # Evaluation Design
 
-本文是公开版评测设计说明，解释为什么采用 dev70 与 bridge150 两层评测，以及它们分别验证什么能力。
+本文是公开版评测设计说明，解释为什么采用 dev70、bridge150 和 bridge_eval_350 组成的分层评测，以及它们分别验证什么能力。
 
 ## 评测目标
 
@@ -12,12 +12,13 @@ Search-R1 MiniLab 评测不只看最终答案是否正确，还要区分：
 - 外部工具是否失败、为空或污染 observation，并据此排除不 clean 的评测结果。
 - 训练是否诱导少搜、早答、重复搜索或搜满不答。
 
-因此当前采用两层评测：
+因此当前采用分层评测：
 
 | Eval      | 角色         | 关注点                            |
 | --------- | ------------ | --------------------------------- |
 | dev70     | 快速健康评测 | checkpoint 是否整体退化           |
 | bridge150 | 多跳定向评测 | bridge/final-hop 搜索策略是否改善 |
+| bridge_eval_350 | 扩展多跳对照 | 验证 base、GRPO、GRPO+OPSD 的递进收益 |
 
 ## Dev70
 
@@ -47,9 +48,23 @@ bridge150 是面向多跳搜索的 targeted eval。它从候选数据中筛选�
 
 Bridge150 不是无偏总体评估；它是压力测试集，用来回答“这个 Agent 是否学会多跳搜索行为”。
 
+## Bridge Eval 350
+
+`bridge_eval_350` 是扩展多跳评测集。它的用途是在更大样本上稳定回答一个工程问题：在较明确的多跳搜索场景中，训练是否真的改善了模型行为。
+
+当前 `bridge_eval_350` 的核心对照是：
+
+| 策略 | Micro EM | Macro EM | Correct | Format | Avg search |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| base+prompt | 0.4629 | 0.4711 | 162/350 | 0.7457 | 2.9543 |
+| GRPO guard-fix 20-step | 0.4886 | 0.4911 | 171/350 | 0.8429 | 2.8629 |
+| GRPO + OPSD v2 5-step | 0.5257 | 0.5200 | 184/350 | 0.9200 | 2.7200 |
+
+这说明训练收益呈递进关系：GRPO 的 turn-level credit 先带来中间增益，随后 gated OPSD v2 在该 checkpoint 上继续改善格式、正确率和搜索效率。
+
 ## 指标口径
 
-两层评测都需要同时观察以下维度：
+各层评测都需要同时观察以下维度：
 
 | 维度                 | 目的                                                  |
 | -------------------- | ----------------------------------------------------- |
@@ -65,13 +80,14 @@ Bridge150 不是无偏总体评估；它是压力测试集，用来回答“这�
 
 ## 与路线选择的关系
 
-Dev70 负责发现整体退化，bridge150 负责验证最终路线真正改善的核心能力。
+Dev70 负责发现整体退化，bridge150 负责小规模 targeted 验证，bridge_eval_350 负责同集三方对照和扩展验证。
 
 当前路线选择遵循这个顺序：
 
 ```text
 dev70 health gate
   -> bridge150 targeted eval
+  -> bridge_eval_350 base/GRPO/GRPO+OPSD comparison
   -> clean/patched boundary check
   -> case review
 ```

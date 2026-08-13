@@ -4,7 +4,7 @@
 
 ## 当前可引用结论快照
 
-截至 2026-08-11，项目主线是 Robust Search-R1 MiniLab：在 Qwen3.5-4B、PyTRIO GRPO 和真实/可模拟搜索工具环境下，构建可观测、可诊断、可复盘的搜索型 Agentic RL 实验框架。
+截至 2026-08-13，项目主线是 Robust Search-R1 MiniLab：在 Qwen3.5-4B、PyTRIO GRPO 和真实/可模拟搜索工具环境下，构建可观测、可诊断、可复盘的搜索型 Agentic RL 实验框架。
 
 当前最重要结论：
 
@@ -40,6 +40,8 @@
 - Zhihu backend 的 parse/url/rate-limit 等工具异常已进入 trajectory 与报告，项目评测规则要求模型策略问题和外部工具失败分开记录。
 - 2026-08-12 新增 SITP 科研经历包装材料 `docs/interview/sitp_research_experience.md`，包含项目背景、研究目标、个人贡献、关键结果、简历写法、2 分钟讲稿、追问口径和公开边界；已在 `docs/interview/README.md` 建立入口。
 - 2026-08-12 按用户要求删除根 `images/` 公开图片资产目录；当前根 README 不再引用该目录，根 `AGENTS.md` 的目录索引已同步移除。
+- 2026-08-13 完成 `bridge_eval_350.jsonl` 的 base+prompt、guard-fix 20-step、最终 OPSD v2 5-step 三方 clean 对照。base+prompt：350 条 trajectory、tool failures 0、macro EM 0.4711、correct 162/350、format 0.7457、平均搜索 2.9543。guard-fix 20-step：macro EM 0.4911、correct 171/350、format 0.8429、平均搜索 2.8629。最终 checkpoint `guardfix20-resume-opsd-v2-5step-20260811`：macro EM 0.5200、correct 184/350、format 0.9200、平均搜索 2.7200。结论是最终路线在较明确多跳场景上有效，主要收益来自格式、停止策略和多跳搜索正确率。
+- 2026-08-13 已将 `bridge_eval_350` 数据集说明、base/GRPO/GRPO+OPSD 三方对照和“面向多跳搜索场景”的项目导向整理到根 `README.md`、`docs/design/evaluation_design.md` 和 `docs/design/idea.md`；同时新建本地私有 `docs/info/checkpoints.md` 记录需保留的 PyTRIO run/checkpoint id，并通过 `.gitignore` 保护，不进入公开提交。
 
 ## 当前 Baseline 表
 
@@ -57,6 +59,9 @@
 | bridge150 | guard-fix 20-step patched | 0.5142 | 83/150 | 0.8267 | 3.2000 | patched protocol，不等同独立 full run |
 | bridge150 | guardfix20 resume OPSD v2 5-step | 0.5242 | 87/150 | 0.9067 | 3.1400 | 10 个 clean chunks 合并，tool failures 0 |
 | bridge150 | guardfix20 resume OPSD v2 20-step seed43 | 0.5317 | 81/150 | 0.8133 | 3.2533 | clean 方差对照，宏平均高但综合弱于 5-step |
+| bridge_eval_350 | prompt-only base | 0.4711 | 162/350 | 0.7457 | 2.9543 | `bridge_eval_350.jsonl`，14 个 clean chunks 合并，micro EM 0.4629 |
+| bridge_eval_350 | guard-fix 20-step | 0.4911 | 171/350 | 0.8429 | 2.8629 | 同集 clean 中间 baseline，micro EM 0.4886 |
+| bridge_eval_350 | guardfix20 resume OPSD v2 5-step | 0.5200 | 184/350 | 0.9200 | 2.7200 | 同集对照，相对 base gained/lost 29/7，micro EM 0.5257 |
 | alias80 | prompt-only base | 0.4500 | 36/80 | 0.9250 | 1.6500 | independent full run |
 | alias80 | evidence-v2 20-step | 0.4375 | 35/80 | 0.9625 | 1.5125 | independent full run |
 

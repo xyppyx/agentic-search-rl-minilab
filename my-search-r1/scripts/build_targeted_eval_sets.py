@@ -110,6 +110,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--report-output", type=Path, default=DEFAULT_REPORT_OUTPUT)
     parser.add_argument("--bridge-size", type=int, default=150)
     parser.add_argument("--alias-size", type=int, default=80)
+    parser.add_argument(
+        "--bridge-per-source-limit",
+        type=int,
+        default=None,
+        help="Maximum bridge examples per data_source before fallback fill.",
+    )
     parser.add_argument("--seed", type=int, default=20260722)
     return parser.parse_args()
 
@@ -124,16 +130,23 @@ def main() -> None:
         seed=args.seed,
         scorer=score_bridge,
         excluded_ids=set(),
+        per_source_limit=args.bridge_per_source_limit,
     )
-    alias = select_candidates(
-        rows,
-        size=args.alias_size,
-        seed=args.seed + 1,
-        scorer=score_alias_granularity,
-        excluded_ids={str(item.row["id"]) for item in bridge},
+    alias = (
+        select_candidates(
+            rows,
+            size=args.alias_size,
+            seed=args.seed + 1,
+            scorer=score_alias_granularity,
+            excluded_ids={row_key(item.row) for item in bridge},
+            per_source_limit=None,
+        )
+        if args.alias_size > 0
+        else []
     )
     write_jsonl([item.row for item in bridge], args.bridge_output)
-    write_jsonl([item.row for item in alias], args.alias_output)
+    if args.alias_size > 0:
+        write_jsonl([item.row for item in alias], args.alias_output)
     write_report(bridge, alias, args.report_output, args)
     print(
         json.dumps(
@@ -163,7 +176,9 @@ def load_rows(paths: Iterable[Path]) -> Iterable[tuple[dict, str]]:
                     continue
                 row = json.loads(line)
                 row_id = str(row.get("id") or f"{path.stem}_{line_number}")
-                if row_id in seen:
+                data_source = str(row.get("data_source") or "unknown")
+                dedupe_key = row_key({"data_source": data_source, "id": row_id})
+                if dedupe_key in seen:
                     continue
                 answers = row.get("answers") or []
                 if not isinstance(answers, list):
@@ -172,9 +187,9 @@ def load_rows(paths: Iterable[Path]) -> Iterable[tuple[dict, str]]:
                     "id": row_id,
                     "question": str(row["question"]),
                     "answers": [str(answer) for answer in answers],
-                    "data_source": str(row.get("data_source") or "unknown"),
+                    "data_source": data_source,
                 }
-                seen.add(row_id)
+                seen.add(dedupe_key)
                 yield normalized, path.stem
 
 
@@ -185,12 +200,13 @@ def select_candidates(
     seed: int,
     scorer,
     excluded_ids: set[str],
+    per_source_limit: int | None,
 ) -> list[Candidate]:
     """Select deterministic candidates, balanced loosely by source."""
     rng = random.Random(seed)
     candidates: list[Candidate] = []
     for row, origin in rows:
-        if row["id"] in excluded_ids:
+        if row_key(row) in excluded_ids:
             continue
         score, tags = scorer(row)
         if score <= 0:
@@ -206,11 +222,11 @@ def select_candidates(
         )
     )
     selected: list[Candidate] = []
-    per_source_limit = max(8, size // 5)
+    resolved_per_source_limit = per_source_limit or max(8, size // 5)
     source_counter: Counter[str] = Counter()
     for item in candidates:
         source = item.row["data_source"]
-        if source_counter[source] >= per_source_limit:
+        if source_counter[source] >= resolved_per_source_limit:
             continue
         selected.append(item)
         source_counter[source] += 1
@@ -225,6 +241,11 @@ def select_candidates(
     if len(selected) < size:
         raise ValueError(f"only selected {len(selected)} candidates, need {size}")
     return selected
+
+
+def row_key(row: dict) -> str:
+    """Return the stable key used to distinguish local ids across data sources."""
+    return f"{row.get('data_source') or 'unknown'}:{row.get('id')}"
 
 
 def score_bridge(row: dict) -> tuple[int, list[str]]:
@@ -317,24 +338,35 @@ def write_report(
         "## Outputs",
         "",
         f"- Bridge eval: `{args.bridge_output}` ({len(bridge)} examples)",
-        f"- Alias/granularity eval: `{args.alias_output}` ({len(alias)} examples)",
-        "",
-        "## Source Counts",
-        "",
-        "### Bridge",
-        "",
-        "| Source | Count |",
-        "| --- | ---: |",
     ]
+    if alias:
+        lines.append(
+            f"- Alias/granularity eval: `{args.alias_output}` ({len(alias)} examples)"
+        )
+    lines.extend(
+        [
+            "",
+            "## Source Counts",
+            "",
+            "### Bridge",
+            "",
+            "| Source | Count |",
+            "| --- | ---: |",
+        ]
+    )
     for source, count in source_counts(bridge).most_common():
         lines.append(f"| `{source}` | {count} |")
-    lines.extend(["", "### Alias / Granularity", "", "| Source | Count |", "| --- | ---: |"])
-    for source, count in source_counts(alias).most_common():
-        lines.append(f"| `{source}` | {count} |")
+    if alias:
+        lines.extend(
+            ["", "### Alias / Granularity", "", "| Source | Count |", "| --- | ---: |"]
+        )
+        for source, count in source_counts(alias).most_common():
+            lines.append(f"| `{source}` | {count} |")
     lines.extend(["", "## Sampled Cases", "", "### Bridge", ""])
     lines.extend(sample_lines(bridge[:12]))
-    lines.extend(["", "### Alias / Granularity", ""])
-    lines.extend(sample_lines(alias[:12]))
+    if alias:
+        lines.extend(["", "### Alias / Granularity", ""])
+        lines.extend(sample_lines(alias[:12]))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 

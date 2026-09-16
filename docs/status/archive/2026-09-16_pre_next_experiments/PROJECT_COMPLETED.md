@@ -1,0 +1,94 @@
+# Project Completed
+
+本文件记录当前可引用的已完成事实、产物、结果和最终决策。压缩前的历史全文快照位于 `docs/status/archive/2026-08-10_pre_cleanup/`，仅供追溯参考，不作为当前项目状态事实源。
+
+## 当前可引用结论快照
+
+截至 2026-08-13，项目主线是 Robust Search-R1 MiniLab：在 Qwen3.5-4B、PyTRIO GRPO 和真实/可模拟搜索工具环境下，构建可观测、可诊断、可复盘的搜索型 Agentic RL 实验框架。
+
+当前最重要结论：
+
+- 早期“面向不可靠搜索工具/故障注入鲁棒训练”的 idea 已暂时搁置；当前正式主线聚焦多跳搜索策略、turn-level credit、gated OPSD 和 clean 评测口径。failure injection 继续保留为工具层 smoke、回归测试和评测边界验证能力，不作为当前算法贡献主卖点。
+- 最终路线已固定为 `turn-credit-final-hop-guardfix-20step-20260806 -> guardfix20-resume-opsd-v2-5step-20260811`：先用 guard-fix 20-step 学 final-hop/bridge 搜索策略，再从其 final state 恢复做 OPSD v2 5-step gated conservative refinement。
+- `prompt_search_budget_guard` 是当前最强 prompt-only base：Zhihu dev70 EM 0.4143、format 0.8857。
+- `turn_credit_evidence_bridge_20step` 是当前最高 format checkpoint 证据：dev70 EM 0.4429、format 1.0000、平均搜索 1.7714；bridge150 EM 0.4583、correct 81/150、format 0.9400、平均搜索 3.0933。
+- `guardfix20-resume-opsd-v2-5step-20260811` 是当前最高 dev70 clean checkpoint：从 `turn-credit-final-hop-guardfix-20step-20260806` final state 恢复，使用 guardfix final weights 作为 KL/reference 与 OPSD teacher，dev70 EM 0.4857、correct 34/70、format 0.9857、平均搜索 1.7286、Zhihu success rate 1.0。
+- `turn-credit-final-hop-guardfix-20step-20260806` 是此前最高 EM/correct 探索证据：dev70 retry EM 0.4571、correct 32/70、format 0.9571、平均搜索 1.9000；bridge150 patched EM 0.5142、correct 83/150、format 0.8267、平均搜索 3.2000。
+- bridge150 的 guard-fix 20-step 最强结果采用 patched protocol，由 full run 中非工具失败记录加失败样本 retry 合成；它可用于项目分析，但不等同一次独立全量 success rate 1.0 run。
+- `gated-opsd-guardfix-5step-20260811` 已完成真实 PyTRIO OPSD 训练与 dev70 有效评测：dev70 EM 0.4286、correct 30/70、format 0.9286、平均搜索 1.9143、Zhihu success rate 1.0。结论是 OPSD v1 工程链路跑通，但 `opsd_coef=0.05` 未超过当前 turn-credit 主线，不扩到 bridge150/alias80。
+- `gated-opsd-v2-guardfix-5step-20260811` 已完成真实 PyTRIO 训练与 dev70 有效评测：dev70 EM 0.4143、correct 29/70、format 0.9143、平均搜索 1.9714、Zhihu success rate 1.0。结论是正向 gate 收窄了 mask，但没有修复 OPSD 对 format/search 的干扰，不扩到 20-step、bridge150 或 alias80。
+- `gated-opsd-v2-guardfix-20step-20260811` 已按用户要求完成真实 PyTRIO 20-step 压力测试：训练阶段 160 条轨迹、correct 52/160、format 0.9000、平均搜索 2.0188、OPSD mask rate 0.0088、Zhihu success rate 1.0；最终 dev5 EM 0.4000、format 1.0000。dev70 reference 为 EM 0.4429、correct 31/70、format 1.0000、平均搜索 2.0286，但因 1 次 Zhihu parse error 导致 success rate 0.9930，未进入正式 baseline 表。
+- `guardfix20-resume-opsd-v2-20step-20260811` 已完成从 guardfix final state 恢复的 20-step reference run：训练阶段 correct 61/160、format 0.9438、平均搜索 1.9563、OPSD mask rate 0.0098，但训练阶段有 1 次工具错误；最终 dev70 reference EM 0.4571、correct 32/70、format 0.9714、平均搜索 2.0571，因 dev70 success rate 0.9931 未进入正式 baseline 表。
+- `guardfix20-resume-opsd-v2-5step-20260811` 已完成 clean bridge150 分片 full eval：EM 0.5242、correct 87/150、format 0.9067、平均搜索 3.1400、tool failures 0；这是当前最高 bridge150 clean/patched 口径结果，但 format 低于 evidence-v2 20-step。
+- `guardfix20-resume-opsd-v2-20step-seed43-20260811` 已按用户要求完成 20-step 重训、dev70 和 bridge150 clean 分片评测：dev70 EM 0.4571、correct 32/70、format 1.0000；bridge150 EM 0.5317、correct 81/150、format 0.8133、平均搜索 3.2533。结论是 20-step 宏平均 bridge EM 略高，但 correct/format/search 综合弱于 5-step，不替代最终候选。
+- `alias_granularity_eval_80` 已完成 prompt-only base 与 evidence-v2 20-step 对比：base EM 0.4500、correct 36/80、format 0.9250；evidence-v2 20-step EM 0.4375、correct 35/80、format 0.9625。guard-fix 20-step 尚未在该 eval 集上验证。
+- turn-level credit 的主要正向收益是改善 evidence bridge search、final-hop attribute search、停止策略和部分 format；主要短板仍是 bridge 场景下的 format/max-search no-answer，以及部分 early answer/final-hop follow-up 被压缩。
+
+## 已验证核心能力
+
+- 统一搜索工具层已完成，支持 `mock_search`、`local_bm25`、`zhihu_search`、多 key 解析、错误脱敏、failure injection 和 backend registry；其中 failure injection 当前定位为测试/诊断能力。
+- trajectory JSONL 与 Markdown report 已完成，支持正确/错误/格式错误/工具失败/重复搜索/行为 bucket/group comparison 等复盘视图。
+- Search-R1 rollout、PyTRIO train/eval CLI、数据准备、checkpoint 分析、offline diagnostics、reward sensitivity、turn-credit analysis 和 gained/lost case review 已完成。
+- Gated OPSD v1 已完成实现和真实训练验证，支持 `--opsd-coef`、`--opsd-context-policy same_context`、`--opsd-mask-policy final_and_credited`、teacher logprob 对齐、OPSD mask 指标和 custom loss metrics。
+- Gated OPSD v2 已完成实现与 local PyTRIO smoke：新增 `--opsd-positive-policy`，默认 `credited_turns + positive_advantage`，避免默认蒸馏 wrong-valid final answer；local nonzero-mask smoke 验证 OPSD teacher logprobs、custom backward 和 optimizer 路径可用。
+- `eval_pytrio.py` 已增加 `--offset` 数据选择参数，用于长评测被外部 sampling session 中断时做分片恢复；默认 `--offset 0` 保持原评测行为。
+- 最终路线公开训练参数已冻结：guard-fix 20-step 使用 `final_hop_bridge`、`evidence_search_turn_bonus=0.05`、`final_hop_search_turn_bonus=0.10`、`early_answer_turn_penalty=0.05`、`missing_final_hop_turn_penalty=0.08`、`final_answer_guard_turn_penalty=0.06`；OPSD v2 5-step 在其 final state 上恢复，使用 `opsd_coef=0.01`、`opsd_mask_policy=credited_turns`、`opsd_positive_policy=positive_advantage`、`opsd_min_teacher_logprob=-3.0`。
+- 根 `README.md` 已按最终路线更新，展示 guard-fix 20-step + OPSD v2 5-step 路线、多路线结果对比和 clean/patched 指标边界；个人笔记材料已从当前公开树移出并由 `.gitignore` 保护。
+- 公开设计文档已按最终迭代路线收敛为上层设计：`docs/design/idea.md` 记录系统设计概览，`docs/design/reward_shaping_plan.md` 记录 reward/辅助目标设计原则，`docs/design/evaluation_design.md` 记录 dev70/bridge150 公开评测设计；具体 prompt、reward 权重、训练参数、checkpoint 和 case review 细节已迁到本地私有材料；根 `README.md` 已补充 train/dev/test/bridge150 的数据与评测集说明。
+- 训练默认稳定化配置已切换为 standardized advantage、advantage clip 2.0、KL-style reference drift penalty 0.01、policy ratio clip 0.2、learning rate 1e-5；reward behavior penalty 默认仍关闭。
+- Reward shaping 已验证过多轮路线：简单 duplicate/empty/max-search penalty 能降低部分坏行为但可能损伤必要 follow-up；prompt/rollout 约束和 turn-level credit 更适合当前 Search-R1 MiniLab。
+- Zhihu backend 的 parse/url/rate-limit 等工具异常已进入 trajectory 与报告，项目评测规则要求模型策略问题和外部工具失败分开记录。
+- 2026-08-12 新增 SITP 科研经历包装材料 `docs/interview/sitp_research_experience.md`，包含项目背景、研究目标、个人贡献、关键结果、简历写法、2 分钟讲稿、追问口径和公开边界；已在 `docs/interview/README.md` 建立入口。
+- 2026-08-14 新增南京大学智能科学与技术学院预推免报名用科研简介材料 `docs/interview/tmp/南大智科预推免科研工作简介.md`，围绕校级 SITP Agentic RL 项目与拟投 PRCV2026 VLM 论文给出 100 字以内合并版、分项版和事实边界。
+- 2026-09-03 继续优化保研简历 Agentic RL/Search-R1 项目表述 `docs/resume/baoyan-resume-template/main.tex`：标题改为多跳问答场景下搜索型大模型智能体强化学习优化，删除“搜索交互训练链路”等模板化表述，突出最终答案稀疏奖励、关键搜索轮次归因、Gated OPSD 和 350 条多跳评测指标；已用 `latexmk -xelatex` 编译通过并生成 1 页 PDF。
+- 2026-09-04 调整保研简历 `docs/resume/baoyan-resume-template/main.tex` 的 OPSD 表述：避免把当前门控辅助目标包装成完整 OPSD 蒸馏，改为“门控自模仿辅助目标”和“基线/GRPO/门控辅助训练”三阶段口径；已用 `latexmk -pdfxe main.tex` 编译通过并保持 1 页 PDF。
+- 2026-09-03 新增简历面试准备文档 `docs/resume/docs/search_r1_interview_prep.md`：覆盖项目背景、系统设计、方法路线、实验结果、部署/运行边界、Search-R1/OPD/OPSD related work 脉络、面试讲法、追问速答和公开表述边界；已做占位符与敏感信息粗查。
+- 2026-09-03 新增面试复习文档 `docs/interview/turn_level_credit_design_implementation.md`：用中文讲解轮次级信用分配的设计动机、代码链路、奖励/惩罚规则、词元级训练信号、与自蒸馏的关系和面试讲法；已加入 `docs/interview/README.md` 入口。
+- 2026-09-04 新增面试复习文档 `docs/interview/gated_opsd_context_design_implementation.md`：基于当前 Gated OPSD 代码解释实现链路、mask/positive/teacher-logprob gate、与 turn-level credit 的配合、OPSD loss 语义，以及和原始 OPD/OPSD 的差异；已加入 `docs/interview/README.md` 入口。
+- 2026-09-04 继续补充 `docs/interview/gated_opsd_context_design_implementation.md`：新增“和 OPSD 的相似点在哪里”与“different-context logprob 追问怎么答”，明确当前方法应表述为借鉴 OPSD 在线自蒸馏范式的门控辅助目标，而非完整 OPSD 公式复现。
+- 2026-09-07 新增并补充面试复习文档 `docs/interview/metrics_dev_test_dataset_analysis.md`：系统整理项目指标体系、dev/test split、bridge/alias targeted eval 的设计原因、当前可引用结果、常见质疑回答、`train.jsonl`/`test.jsonl` 样例和最终路线实际训练取样量；已加入 `docs/interview/README.md` 入口。
+- 2026-09-07 新增并补充保研面试专题问答 `docs/interview/question/data_metrics_qa.md`：围绕数据来源、schema、清洗、train/dev/test 切分、实际训练取样、bridge350 构建方式、防测试集泄露、bridge/alias targeted eval、指标选择、工具成功率和可信边界整理 33 个问答；已加入 `docs/interview/README.md` 入口。
+- 2026-09-07 新增保研面试专题问答 `docs/interview/question/grpo_turn_credit_opsd_qa.md`：围绕 GRPO 训练流程、组内 advantage、turn-level credit 过程归因、OPSD-like 门控辅助目标、最终路线结果和常见算法质疑整理 33 个问答；已加入 `docs/interview/README.md` 入口。
+- 2026-08-12 按用户要求删除根 `images/` 公开图片资产目录；当前根 README 不再引用该目录，根 `AGENTS.md` 的目录索引已同步移除。
+- 2026-08-13 完成 `bridge_eval_350.jsonl` 的 base+prompt、guard-fix 20-step、最终 OPSD v2 5-step 三方 clean 对照。base+prompt：350 条 trajectory、tool failures 0、macro EM 0.4711、correct 162/350、format 0.7457、平均搜索 2.9543。guard-fix 20-step：macro EM 0.4911、correct 171/350、format 0.8429、平均搜索 2.8629。最终 checkpoint `guardfix20-resume-opsd-v2-5step-20260811`：macro EM 0.5200、correct 184/350、format 0.9200、平均搜索 2.7200。结论是最终路线在较明确多跳场景上有效，主要收益来自格式、停止策略和多跳搜索正确率。
+- 2026-08-13 已将 `bridge_eval_350` 数据集说明、base/GRPO/GRPO+OPSD 三方对照和“面向多跳搜索场景”的项目导向整理到根 `README.md`、`docs/design/evaluation_design.md` 和 `docs/design/idea.md`；同时新建本地私有 `docs/info/checkpoints.md` 记录需保留的 PyTRIO run/checkpoint id，并通过 `.gitignore` 保护，不进入公开提交。
+
+## 当前 Baseline 表
+
+| 场景 | 模型/策略 | EM macro | Correct | Format | Avg search | 备注 |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| dev70 | prompt-only best | 0.4143 | - | 0.8857 | - | `prompt_search_budget_guard` |
+| dev70 | evidence-v2 20-step | 0.4429 | - | 1.0000 | 1.7714 | 高 format checkpoint |
+| dev70 | gated OPSD guard-fix 5-step | 0.4286 | 30/70 | 0.9286 | 1.9143 | OPSD v1 有效评测，未超过 turn-credit 主线 |
+| dev70 | gated OPSD v2 guard-fix 5-step | 0.4143 | 29/70 | 0.9143 | 1.9714 | OPSD v2 有效评测，弱于 v1 和 guard-fix 主线 |
+| dev70 | guard-fix 20-step retry | 0.4571 | 32/70 | 0.9571 | 1.9000 | 此前最高 dev70 EM |
+| dev70 | guardfix20 resume OPSD v2 5-step | 0.4857 | 34/70 | 0.9857 | 1.7286 | 当前最高 clean dev70 |
+| dev70 | guardfix20 resume OPSD v2 20-step seed43 | 0.4571 | 32/70 | 1.0000 | 1.8857 | clean 方差对照，未超过 5-step |
+| bridge150 | prompt-only base | 0.4750 | 74/150 | 0.7200 | 3.3067 | independent full run |
+| bridge150 | evidence-v2 20-step | 0.4583 | 81/150 | 0.9400 | 3.0933 | independent full run |
+| bridge150 | guard-fix 20-step patched | 0.5142 | 83/150 | 0.8267 | 3.2000 | patched protocol，不等同独立 full run |
+| bridge150 | guardfix20 resume OPSD v2 5-step | 0.5242 | 87/150 | 0.9067 | 3.1400 | 10 个 clean chunks 合并，tool failures 0 |
+| bridge150 | guardfix20 resume OPSD v2 20-step seed43 | 0.5317 | 81/150 | 0.8133 | 3.2533 | clean 方差对照，宏平均高但综合弱于 5-step |
+| bridge_eval_350 | prompt-only base | 0.4711 | 162/350 | 0.7457 | 2.9543 | `bridge_eval_350.jsonl`，14 个 clean chunks 合并，micro EM 0.4629 |
+| bridge_eval_350 | guard-fix 20-step | 0.4911 | 171/350 | 0.8429 | 2.8629 | 同集 clean 中间 baseline，micro EM 0.4886 |
+| bridge_eval_350 | guardfix20 resume OPSD v2 5-step | 0.5200 | 184/350 | 0.9200 | 2.7200 | 同集对照，相对 base gained/lost 29/7，micro EM 0.5257 |
+| alias80 | prompt-only base | 0.4500 | 36/80 | 0.9250 | 1.6500 | independent full run |
+| alias80 | evidence-v2 20-step | 0.4375 | 35/80 | 0.9625 | 1.5125 | independent full run |
+
+## 历史阶段索引
+
+旧实验细节不再写入当前 status；需要追溯时读取下列复盘文档或 archive 快照。
+
+- 2026-07-19 至 2026-07-20：工具层、trajectory report、rollout smoke、PyTRIO train/eval 迁移、数据准备和首次端到端验证。
+- 2026-07-21：reward penalty、offline diagnostics、reward sensitivity、penalty v2/v3/v4、多组 5-step/20-step 对比与 gained/lost review。
+- 2026-07-22：prompt constraints、search budget guard、KL/std 稳定化、turn-level evidence credit v2、小预算与 20-step/50-step 尝试。
+- 2026-07-23：bridge150 与 alias80 targeted eval、parse error 可观测性修复、base vs 20-step case review。
+- 2026-08-05 至 2026-08-06：final-hop bridge guard、guard-fix、5-step/20-step 训练、dev70/bridge150 full 与 patched 评测。
+- 2026-08-06 至 2026-08-10：面向保研/实习简历的项目材料整理、Backup 分支归档上游教学目录、main 聚焦自有实现。
+- 2026-08-11：Gated OPSD v1 local smoke、Zhihu dev-5 health、5-step 真实训练、dev70 eval 与诊断完成；随后完成 OPSD v2 正向 gate 实现、local smoke、真实 5-step 训练、dev70 eval、用户指定的 v2 20-step 压力测试，以及从 guardfix-20step final state 恢复的 OPSD v2 5-step/20-step 对照。bridge150 经分片重试完成 clean full eval，并完成 20-step seed43 重训方差对照；最终路线固定为 guard-fix 20-step + OPSD v2 5-step。
+
+## 公开边界
+
+- 本项目是个人学习型 POC，不代表 PyTRIO、SwanLab、知乎开放平台、Search-R1 官方实现或原作者参与、委托或认可。
+- 公开文档不得记录真实 API key、远程 sampler weights URI、SwanLab 私有链接、模型权重、checkpoint、私有服务器地址或账号。
+- success rate < 1.0 的真实搜索 full run 不进入正式模型效果表；patched protocol 必须显式标注组成和边界。

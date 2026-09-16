@@ -86,6 +86,7 @@ docs/_build/
 docs/interview/
 docs/learning/
 docs/info/checkpoints.md
+docs/resume
 
 # PyBuilder
 .pybuilder/

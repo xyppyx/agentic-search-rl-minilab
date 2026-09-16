@@ -1,56 +1,53 @@
 # Project Log
 
-本文件记录需要长期追溯的重要事件、方向变化、问题解决和阶段复盘。旧实验长流水账已在 2026-08-10 压缩，压缩前全文快照位于 `docs/status/archive/2026-08-10_pre_cleanup/`，仅供历史追溯，不作为当前事实源。
+本文件只记录需要长期追溯的重要决策和方向变化。压缩前快照位于 `docs/status/archive/2026-09-16_pre_next_experiments/`；更早流水账快照位于 `docs/status/archive/`，仅供历史追溯，不作为当前事实源。
 
 ## 2026-07-19
 
-- 将仓库协作规范从旧医疗后训练项目语境迁移到 Agentic RL/Search-R1 MiniLab 语境。
-- 确认项目边界：`my-search-r1/` 是后续自有改进实现目录，`docs/design/idea.md` 是近期路线依据。
-- 完成工具层、trajectory JSONL、Markdown report 和最小 PyTRIO rollout smoke，奠定后续可观测 Search-R1 MiniLab 基础。
+- 将仓库协作规范迁移到 Agentic RL/Search-R1 MiniLab 语境。
+- 确认 `my-search-r1/` 为自有改进实现目录，完成工具层、trajectory JSONL、Markdown report 和最小 PyTRIO rollout smoke。
 
 ## 2026-07-22
 
-- 用户决策：后续训练默认采用 KL/std 稳定化组合，`train_pytrio.py` 默认值切换为 `advantage_normalization=standardize`、`advantage_clip=2.0`、`kl_coef=0.01`、`policy_ratio_clip=0.2`、`learning_rate=1e-5`；reward behavior penalty 默认仍关闭。
-- 决策依据：简单 penalty 和部分长步数扩展存在压缩必要 follow-up 或被 PyTRIO 外部 sampling 阻塞的问题；后续不再假设步数越长越好。
+- 决策：默认训练配置切换为 KL/std 稳定化组合：standardized advantage、advantage clip 2.0、KL-style reference drift penalty 0.01、policy ratio clip 0.2、learning rate 1e-5。
+- 决策依据：简单 penalty 和盲目扩步数可能压缩必要 follow-up；后续不假设步数越长越好。
 
 ## 2026-07-23
 
-- Targeted bridge 与 alias/granularity eval 形成当前重要诊断结论：turn-level evidence credit 能明显提升 format 和 correct 数，但 bridge EM macro 与 alias/granularity EM 未全面超过 prompt-only base。
-- 长期方向：不要只优化平均搜索次数；应优先保护 final-hop follow-up、属性 query 和短答案格式。
+- Targeted bridge 与 alias/granularity eval 形成关键诊断：turn-level evidence credit 能改善 format 和 correct 数，但 bridge EM macro 与 alias/granularity EM 未全面超过 prompt-only base。
+- 长期方向：优化 final-hop follow-up、属性 query 和短答案格式，而不是只优化平均搜索次数。
 
-## 2026-08-05
+## 2026-08-05 至 2026-08-06
 
-- 完成 final-hop bridge guard 与 guard fix。新增 final-hop attribute search credit、missing-final-hop penalty 和 final-answer/max-search guard，确认这些信号能在真实失败轨迹中命中。
-- 长期方向：final-hop credit 有正向价值，但 naive 扩步数和简单 penalty 都不能替代 case-driven guard 设计。
-
-## 2026-08-06
-
-- 完成 guard-fix 20-step 训练与 dev70 retry 有效评测；bridge150 full run 因 Zhihu 外部工具错误未过 success rate 1.0 门槛，随后生成 patched bridge150 作为分析口径。
-- 长期边界：patched bridge150 可作为当前最高 bridge EM/correct 探索证据，但不能冒充独立全量 success rate 1.0 run。
+- 完成 final-hop bridge guard 与 guard fix，新增 final-hop attribute search credit、missing-final-hop penalty 和 final-answer/max-search guard。
+- 完成 guard-fix 20-step 训练与 dev70 retry 有效评测；bridge150 历史强结果采用 patched protocol，不能包装成独立 clean full run。
 
 ## 2026-08-10
 
-- 按用户要求创建 `Backup` 分支，归档上游 `00-loss-function/`、`01-grpo/`、`02-opd/`、`03-search-r1/` 教学目录；`main` 聚焦 Robust Search-R1 MiniLab 自有实现和公开项目文档。
-- 决策：后续若接 OPD/OPSD，不做 naive full-sequence distillation；只考虑 gated auxiliary objective，并让 GRPO/turn-level credit 继续作为主训练信号。
-- 状态维护决策：在 `docs/status/archive/2026-08-10_pre_cleanup/` 保存压缩前 status 快照；archive 只供历史追溯，不作为当前进度、TODO、基线或实验结论。当前状态仍只读取 `PROJECT_COMPLETED.md`、`PROJECT_TODO.md`、`PROJECT_LOG.md`。
-- 创建 OPSD 实验分支 `exp/gated-opsd`。按用户要求将状态压缩触发规则写入 `AGENTS.md` 与 `docs/AGENTS.md`，并分别提交到 `main` 与 `exp/gated-opsd`，后续切新主线、阶段完成、status 超过阈值或同一 active track 累计多个 run/retry 时先压缩 status 再继续推进。
+- 创建 `Backup` 分支归档上游教学目录；`main` 聚焦 Robust Search-R1 MiniLab 自有实现和公开项目文档。
+- 决策：后续若接 OPD/OPSD，不做 naive full-sequence distillation，只考虑 gated auxiliary objective，并让 GRPO/turn-level credit 继续作为主训练信号。
+- 建立 status archive/压缩规则：切换新主线、阶段完成、status 超阈值或同一 active track 累计多个 run/retry 时先压缩 status。
 
 ## 2026-08-11
 
-- 完成 gated OPSD v1 真实 PyTRIO 训练与 dev70 有效评测；OPSD 工程链路跑通，但 `opsd_coef=0.05` 的 5-step 结果没有超过 turn-credit 主线。
-- 决策：不把 OPSD v1 扩到 bridge150 或 alias80；若继续 OPSD，只做更保守的 v2 单变量实验，优先降低系数或收窄 mask。
-- 完成 OPSD v2 正向 gate 实现：默认 `credited_turns + positive_advantage`，并保留 `all` 作为 v1 复现口径；local PyTRIO smoke 通过，下一步才进入真实 Zhihu 5-step。
-- 完成 OPSD v2 真实 Zhihu 5-step 训练与 dev70 有效评测；dev70 EM 0.4143、format 0.9143、平均搜索 1.9714，弱于 v1 和 turn-credit 主线。决策：停放 same-context OPSD，不继续扩到 20-step、bridge150 或 alias80。
-- 按用户要求完成 OPSD v2 20-step 压力测试；训练阶段 20/20 step 完成且 Zhihu success rate 1.0，dev70 reference 为 EM 0.4429、correct 31/70、format 1.0000、平均搜索 2.0286，但因 1 次 Zhihu parse error 导致 dev70 success rate 0.9930，未作为正式 baseline。决策不变：same-context OPSD 仍停放；若要正式 20-step 结论，先补 clean dev70 或显式 patched 口径。
-- 回答“OPSD 是从 base 还是 guardfix checkpoint 起步”后，定位到 `turn-credit-final-hop-guardfix-20step-20260806` 的 final training state 和 final sampler weights，并完成从该 checkpoint 恢复的 OPSD v2 5-step/20-step 对照。5-step dev70 clean EM 0.4857、correct 34/70、format 0.9857、平均搜索 1.7286，成为当前最高 clean dev70；20-step dev70 reference EM 0.4571、format 0.9714、平均搜索 2.0571，但训练和 dev70 都有工具失败。长期决策：OPSD v2 对强 checkpoint 有短程增益，不支持继续加步数；下一步若扩展，应优先验证 bridge150/alias80。
-- 按用户要求启动 `guardfix20-resume-opsd-v2-5step-20260811` 的 bridge150 验证。bridge health5 clean，但 full run 在 19/150 遇到 PyTRIO sampling run 失活且未产出完整 JSONL；随后新增 `eval_pytrio.py --offset` 以支持分片恢复，分片重跑又因 PyTRIO 余额/计费状态不足无法创建 sampling run。决策：不记录 bridge150 baseline，等待外部资源恢复后按 15 条分片重跑并合并。
-- 按用户要求重试 bridge150；PyTRIO 余额/计费状态恢复后，采用 15 条分片协议完成 `guardfix20-resume-opsd-v2-5step-20260811` 的 clean bridge150 full eval。首次 chunk 0-15 有 1 次 Zhihu 工具错误并被重跑替换，最终 150 条合并结果为 EM 0.5242、correct 87/150、format 0.9067、平均搜索 3.1400、tool failures 0。长期决策：强 checkpoint + OPSD v2 5-step 同时刷新 dev70 clean 与 bridge150 clean/patched 口径，但 format 仍需在 alias80 和 case review 中重点检查。
-- 按用户要求重训 20-step OPSD v2 做方差对照。新增结论：eval 分片不作为默认，只作为长评测显式 clean-chunk 协议；训练不能独立分片合并，只能 checkpoint resume。`guardfix20-resume-opsd-v2-20step-seed43-20260811` clean 训练完成，20 step 中 16 次有效 update、4 次 skipped，训练阶段 tool success rate 1.0。Dev70 clean 为 EM 0.4571、correct 32/70、format 1.0000；bridge150 clean 为 EM 0.5317、correct 81/150、format 0.8133、平均搜索 3.2533。长期决策：20-step 宏平均 bridge EM 略高，但 correct/format/search 综合弱于 5-step，不替代最终候选。
-- 按用户要求固定最终路线为 `turn-credit-final-hop-guardfix-20step-20260806 -> guardfix20-resume-opsd-v2-5step-20260811`，并整理公开训练参数。决策表述：guard-fix 20-step 是搜索策略基座，OPSD v2 5-step 是强 checkpoint 上的 gated conservative refinement；后续 alias80/second-seed 属于验证补充，不改变当前主路线。
-- 按用户要求更新个人项目表达材料：新增 OPD/OPSD 基础笔记，统一一页纸讲稿、问答速查、STAR 项目经历和技术实现细节到最终路线口径。长期表达重点从“单个 guard-fix checkpoint”调整为“多轮尝试对比后，选择 guard-fix 20-step + OPSD v2 5-step，并能解释 5-step、gated objective、mask 与 patched/clean 指标边界”。
-- 按用户要求将个人项目表达材料从当前公开 `main` 树移出；不重写历史，只通过 `git rm --cached` 和 `.gitignore` 保留本地副本，避免 GitHub 首页和当前文件树展示相关目录。根 README 保留项目路线和实验结果，不再包含个人材料入口。
-- 按用户要求更新公开设计与 README 数据说明：`docs/design/` 从早期计划/旧 reward 流水账收敛为当前系统设计、reward/辅助目标原则和 dev70/bridge150 评测设计；公开设计只保留上层路线，具体 prompt、reward 权重、训练参数、checkpoint 和 case review 细节迁入本地私有材料。根 README 新增 train/dev/test/bridge150 数据与评测集说明，且不展示未进入当前主线的数据集。
+- OPSD v1 和 base 起点 OPSD v2 工程链路跑通，但 dev70 未超过 turn-credit 主线；base 起点 same-context OPSD 停放。
+- 从 `turn-credit-final-hop-guardfix-20step-20260806` 恢复做 OPSD v2 5-step/20-step 对照。5-step clean dev70 成为当前最高；20-step 对照不支持“更多步数更好”。
+- 完成 final route 的 clean bridge150 分片评测；固定最终路线为 `turn-credit-final-hop-guardfix-20step-20260806 -> guardfix20-resume-opsd-v2-5step-20260811`。
+- 长期表述：guard-fix 20-step 是搜索策略基座，OPSD v2 5-step 是强 checkpoint 上的 gated conservative refinement；后续 alias80/second-seed 属于验证补充，不改变当前主路线。
 
-## 2026-08-12
+## 2026-08-12 至 2026-08-13
 
-- 明确项目定位调整：早期“面向不可靠搜索工具/故障注入鲁棒训练”的 idea 已暂时搁置。后续对外表达和当前事实源不再把它作为主线标题或算法卖点；failure injection 和 tool failure 统计保留为 smoke、回归测试、评测可信度和 clean/patched 边界说明。当前主线表述收敛为“面向多跳问答/真实搜索环境的搜索型 LLM Agent 强化学习训练与评测框架”。
+- 项目定位从“不可靠搜索工具鲁棒训练”收敛为“面向多跳问答/真实搜索环境的搜索型 LLM Agent 强化学习训练与评测框架”。
+- 完成 `bridge_eval_350` 的 base+prompt、guard-fix 20-step、final route 三方 clean 对照；结论限定为较明确 bridge-hop 场景有效，MuSiQue/复杂多跳仍是短板。
+- README 与公开设计文档已更新到最终路线、数据 split、评测集和 clean/patched 口径。
+
+## 2026-09-03 至 2026-09-07
+
+- 补充保研/面试材料：简历项目表述、Search-R1 面试准备、turn-level credit、Gated OPSD、数据指标 QA、GRPO/turn-credit/OPSD QA。
+- 长期表达边界：主动说明小预算 POC、实际训练 trajectory 数、dev70 health gate、bridge350 targeted subset 和 final route 尚未验证 alias80。
+
+## 2026-09-16
+
+- 按用户要求整理 Git 与项目文档，准备后续实验前的状态压缩。
+- 在 `docs/status/archive/2026-09-16_pre_next_experiments/` 保存压缩前 `PROJECT_COMPLETED.md`、`PROJECT_TODO.md`、`PROJECT_LOG.md` 和根 README 快照。
+- 当前 status 收敛为：最终路线与 baseline、下一步验证补强、训练扩量门槛和公开边界；旧 run 流水账继续只在 archive 中追溯。

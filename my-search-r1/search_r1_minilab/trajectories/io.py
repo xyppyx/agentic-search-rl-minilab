@@ -1,4 +1,8 @@
-"""Trajectory JSONL serialization."""
+"""Trajectory JSONL 读写。
+
+所有训练、评测和 smoke 产物都尽量落成稳定 schema，方便后续 report、离线诊断、
+turn-credit 分析和 case review 复用。
+"""
 
 from __future__ import annotations
 
@@ -7,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
+# 统一顶层字段，避免不同脚本输出缺字段导致 report/analysis 分支复杂化。
 DEFAULT_TRAJECTORY_FIELDS = {
     "question": "",
     "answers": [],
@@ -23,7 +28,7 @@ DEFAULT_TRAJECTORY_FIELDS = {
 
 
 def normalize_trajectory_record(record: dict[str, Any]) -> dict[str, Any]:
-    """Return a trajectory record with stable top-level fields."""
+    """补齐并校验 trajectory 顶层字段。"""
     normalized = {**DEFAULT_TRAJECTORY_FIELDS, **record}
     if not isinstance(normalized["answers"], list):
         normalized["answers"] = [normalized["answers"]]
@@ -40,7 +45,7 @@ def write_trajectory_jsonl(
     records: Iterable[dict[str, Any]],
     output_path: str | Path,
 ) -> int:
-    """Write normalized trajectory records as UTF-8 JSONL."""
+    """把标准化 trajectory records 写成 UTF-8 JSONL。"""
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
@@ -53,7 +58,7 @@ def write_trajectory_jsonl(
 
 
 def load_trajectory_jsonl(input_path: str | Path) -> list[dict[str, Any]]:
-    """Load and normalize trajectory records from JSONL."""
+    """从 JSONL 读取并标准化 trajectory records。"""
     path = Path(input_path)
     records: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as stream:

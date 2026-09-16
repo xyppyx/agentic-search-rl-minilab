@@ -1,4 +1,9 @@
-"""Answer-format and exact-match reward helpers."""
+"""答案格式、EM reward 与可选行为 shaping。
+
+本文件只负责 trajectory 完成后的最终答案打分。当前主线主要依赖 base reward
+加 turn-level credit；这里的 behavior penalties 是早期实验保留的可配置诊断/
+消融能力，默认均关闭。
+"""
 
 from __future__ import annotations
 
@@ -15,7 +20,7 @@ ARTICLE_PATTERN = re.compile(r"\b(a|an|the)\b", re.IGNORECASE)
 
 @dataclass(frozen=True)
 class RewardResult:
-    """Reward and diagnostic fields for one final answer."""
+    """单个 final answer 的基础打分结果。"""
 
     reward: float
     valid_format: bool
@@ -25,7 +30,11 @@ class RewardResult:
 
 @dataclass(frozen=True)
 class RewardShapingConfig:
-    """Optional trajectory-level reward penalties."""
+    """可选 trajectory-level reward shaping 配置。
+
+    所有 penalty/bonus 默认关闭，便于复现纯 EM/format reward；启用时只影响
+    trajectory 总 reward，不提供 turn 级 token credit。
+    """
 
     duplicate_query_penalty: float = 0.0
     empty_result_penalty: float = 0.0
@@ -60,7 +69,7 @@ class RewardShapingConfig:
 
 @dataclass(frozen=True)
 class RewardComponents:
-    """Base reward, applied penalties, and final reward."""
+    """base reward、各项 shaping 分量和最终 reward。"""
 
     base_reward: float
     duplicate_query_penalty: float
@@ -91,7 +100,7 @@ class RewardComponents:
 
 
 def normalize_answer(text: str) -> str:
-    """Normalize answer text for Search-R1 exact match."""
+    """按 Search-R1 EM 口径归一化答案文本。"""
     lowered = text.lower()
     without_punctuation = "".join(
         char for char in lowered if not unicodedata.category(char).startswith("P")
@@ -101,7 +110,7 @@ def normalize_answer(text: str) -> str:
 
 
 def extract_answer(text: str) -> str | None:
-    """Extract a single non-empty Answer line."""
+    """抽取唯一且非空的 Answer 行；不满足格式则返回 None。"""
     matches = ANSWER_PATTERN.findall(text)
     if len(matches) != 1:
         return None
@@ -110,7 +119,7 @@ def extract_answer(text: str) -> str | None:
 
 
 def score_answer(text: str, references: list[str]) -> RewardResult:
-    """Score final answer as 1.0 exact match, 0.0 wrong answer, or -0.1 invalid."""
+    """基础打分：EM 为 1.0，格式正确但答案错为 0.0，格式错误为 -0.1。"""
     answer = extract_answer(text)
     if answer is None:
         return RewardResult(-0.1, False, False, None)
@@ -127,7 +136,7 @@ def apply_reward_shaping(
     answer_token_count: int = 0,
     references: list[str] | None = None,
 ) -> RewardComponents:
-    """Apply optional trajectory behavior penalties to a base answer reward."""
+    """在基础答案 reward 上叠加可选行为 penalty/bonus。"""
     duplicate_query_penalty = 0.0
     empty_result_penalty = 0.0
     max_search_no_answer_penalty = 0.0
@@ -138,6 +147,7 @@ def apply_reward_shaping(
     helpful_followup_bonus = 0.0
     no_search_penalty = 0.0
 
+    # 正确答案不再扣行为分，避免惩罚“虽然搜索行为不完美但最终答对”的轨迹。
     if not base.exact_match:
         if _no_search_failure(diagnostics):
             no_search_penalty = config.no_search_penalty

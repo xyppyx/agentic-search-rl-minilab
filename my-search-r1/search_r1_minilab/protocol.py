@@ -1,4 +1,9 @@
-"""Search-R1 chat protocol helpers used by MiniLab rollout smoke runs."""
+"""Search-R1 对话协议辅助函数。
+
+本文件只处理“模型应该按什么格式和搜索工具交互”：system prompt、tool
+schema、assistant 输出解析、tool observation 拼接和 tokenizer chat template
+渲染。训练、reward 和搜索 backend 都不放在这里。
+"""
 
 from __future__ import annotations
 
@@ -10,6 +15,8 @@ from typing import Any
 
 MODEL_TOOL_NAME = "search"
 
+# 暴露给 tokenizer chat template 的工具定义；模型输出必须匹配
+# TOOL_CALL_PATTERN，rollout 才会真正调用后端搜索。
 SEARCH_TOOL = {
     "type": "function",
     "function": {
@@ -25,6 +32,8 @@ SEARCH_TOOL = {
     },
 }
 
+# 这是 prompt-only search budget guard 的核心约束：要求先搜、桥接实体后继续搜、
+# 最终答案只输出一行短 span。这里影响 rollout 行为，但不直接参与 loss。
 SYSTEM_PROMPT = """You answer factual questions with help from a search tool.
 Search before giving the final answer. Use concise English queries.
 Do not answer from memory before seeing at least one search result.
@@ -44,6 +53,8 @@ TOOL_OBSERVATION_REMINDER = (
     "answer with the best supported span instead of searching again."
 )
 
+# 训练 rollout 使用 XML-like tool call 文本协议，而不是直接依赖平台级 function
+# calling；这样 sampled text、token 和 logprob 能完整进入 trajectory。
 TOOL_CALL_PATTERN = re.compile(
     r"<tool_call>\s*<function=search>\s*<parameter=query>\s*(.*?)\s*"
     r"</parameter>\s*</function>\s*</tool_call>",
@@ -53,7 +64,7 @@ TOOL_CALL_PATTERN = re.compile(
 
 @dataclass(frozen=True)
 class ParsedAssistant:
-    """One parsed assistant response."""
+    """一次 assistant 输出的解析结果。"""
 
     kind: str
     content: str
@@ -61,7 +72,7 @@ class ParsedAssistant:
 
 
 def initial_messages(question: str) -> list[dict[str, Any]]:
-    """Create the initial system/user messages for one question."""
+    """为单个问题构造初始 system/user messages。"""
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": question},
@@ -69,7 +80,7 @@ def initial_messages(question: str) -> list[dict[str, Any]]:
 
 
 def build_prompt(tokenizer: Any, messages: list[dict[str, Any]]) -> list[int]:
-    """Render messages with the model chat template and search tool definition."""
+    """用模型 chat template 渲染 messages，并注入 search tool 定义。"""
     return _render_chat(tokenizer, messages, add_generation_prompt=True)
 
 
@@ -79,7 +90,7 @@ def _render_chat(
     *,
     add_generation_prompt: bool,
 ) -> list[int]:
-    """Render messages and normalize tokenizer outputs to a flat token list."""
+    """渲染 chat template，并把不同 tokenizer 返回格式统一为一维 token 列表。"""
     rendered = tokenizer.apply_chat_template(
         messages,
         tools=[SEARCH_TOOL],
@@ -97,7 +108,7 @@ def _render_chat(
 
 
 def _encoded_text_tokens(tokenizer: Any, text: str) -> list[int]:
-    """Encode plain text and normalize tokenizer outputs to a flat token list."""
+    """编码普通文本，并统一为一维 token 列表。"""
     encoded = tokenizer.encode(text, add_special_tokens=False)
     if hasattr(encoded, "tolist"):
         encoded = encoded.tolist()
@@ -107,7 +118,7 @@ def _encoded_text_tokens(tokenizer: Any, text: str) -> list[int]:
 
 
 def _suffix_prefix_overlap(tokens: list[int], suffix: list[int]) -> int:
-    """Return the longest overlap between tokens suffix and suffix prefix."""
+    """返回 tokens 后缀与 suffix 前缀的最长重叠长度。"""
     for length in range(min(len(tokens), len(suffix)), 0, -1):
         if tokens[-length:] == suffix[:length]:
             return length
@@ -122,7 +133,7 @@ def build_next_prompt(
     completion_tokens: list[int],
     next_tool_message: dict[str, Any],
 ) -> list[int]:
-    """Append assistant output and a tool observation without re-tokenizing sampled tokens."""
+    """在不重 tokenize 采样 completion 的前提下，追加 tool observation prompt。"""
     canonical_prompt = build_prompt(tokenizer, messages_before_assistant)
     assistant_message = {"role": "assistant", "content": assistant_text}
     messages_with_assistant = [*messages_before_assistant, assistant_message]
@@ -133,6 +144,8 @@ def build_next_prompt(
     )
     canonical_text_tokens = _encoded_text_tokens(tokenizer, assistant_text)
     canonical_action = [*canonical_prompt, *canonical_text_tokens]
+    # 先用标准 chat template 验证 assistant 边界，防止手工拼接后的 token
+    # 与模型实际上下文不一致，进而破坏后续 logprob/target 对齐。
     if canonical_assistant_end[: len(canonical_action)] != canonical_action:
         raise ValueError("chat template cannot recover assistant message boundary")
 
@@ -145,6 +158,8 @@ def build_next_prompt(
         raise ValueError("chat template rewrote history after tool observation")
 
     observation_tokens = canonical_next_prompt[len(canonical_assistant_end) :]
+    # sampled completion 可能已经包含一部分 assistant closing token；用 overlap
+    # 去重，避免把同一段 template token 写入两次。
     overlap = _suffix_prefix_overlap(completion_tokens, assistant_closing_tokens)
     return [
         *previous_prompt_tokens,
@@ -155,7 +170,7 @@ def build_next_prompt(
 
 
 def parse_assistant(text: str) -> ParsedAssistant:
-    """Classify an assistant response as a tool call, final answer, or invalid output."""
+    """把 assistant 文本分类为 tool call、final answer 或格式错误。"""
     matches = list(TOOL_CALL_PATTERN.finditer(text))
     if not matches:
         kind = "invalid" if "<tool_call>" in text else "answer"
@@ -170,12 +185,12 @@ def parse_assistant(text: str) -> ParsedAssistant:
 
 
 def tool_message_content(content: str) -> str:
-    """Append rollout guidance to one tool observation."""
+    """给 tool observation 追加 follow-up/最终答案格式提醒。"""
     return f"{content}\n\n{TOOL_OBSERVATION_REMINDER}"
 
 
 def tool_message(call_id: str, content: str) -> dict[str, Any]:
-    """Build a chat message containing a tool observation."""
+    """构造一条 role=tool 的 chat message。"""
     return {
         "role": "tool",
         "tool_call_id": call_id,
@@ -185,11 +200,11 @@ def tool_message(call_id: str, content: str) -> dict[str, Any]:
 
 
 def stop_sequences(tokenizer: Any) -> list[str]:
-    """Return stop strings for ending one assistant turn."""
+    """返回单轮 assistant 生成的 stop strings。"""
     eos_token = getattr(tokenizer, "eos_token", None)
     return [eos_token] if eos_token else []
 
 
 def token_count(tokenizer: Any, text: str) -> int:
-    """Count tokenizer tokens in plain text."""
+    """计算普通文本 token 数，用于工具响应预算控制。"""
     return len(_encoded_text_tokens(tokenizer, text))

@@ -1,4 +1,9 @@
-"""Turn-level credit heuristics shared by training and offline analysis."""
+"""Turn-level credit 启发式规则。
+
+本文件只负责“识别哪些 assistant turn 值得单独奖励/惩罚”。真正把识别结果写回
+effective_advantage、生成 token-level advantage 和 OPSD mask 的逻辑在 training.py。
+这些规则同时服务训练和离线分析，便于复盘 credit 命中是否符合预期。
+"""
 
 from __future__ import annotations
 
@@ -10,6 +15,8 @@ from search_r1_minilab.diagnostics import FOLLOWUP_CUE_TOKENS, QUERY_STOPWORDS
 from search_r1_minilab.rewards import normalize_answer
 
 
+# 简单实体/数字/关系词规则用于轻量启发式，不依赖额外 NER 模型，保证 smoke 和
+# 离线复盘都能本地可复现。
 ENTITY_PATTERN = re.compile(r"\b[A-Z][A-Za-z0-9]*(?:[-'][A-Za-z0-9]+)?(?:\s+[A-Z][A-Za-z0-9]*(?:[-'][A-Za-z0-9]+)?){0,4}\b")
 NUMBER_PATTERN = re.compile(r"\b\d+(?:\.\d+)?\b")
 RELATION_TOKENS = FOLLOWUP_CUE_TOKENS | {
@@ -31,6 +38,7 @@ RELATION_TOKENS = FOLLOWUP_CUE_TOKENS | {
     "system",
     "university",
 }
+# 从原问题中识别“最后一跳需要查的属性类型”，例如死亡日期、国籍、父母、作者。
 FINAL_HOP_ATTRIBUTE_CUES: dict[str, tuple[str, ...]] = {
     "date": (
         "birth",
@@ -75,6 +83,7 @@ FINAL_HOP_ATTRIBUTE_CUES: dict[str, tuple[str, ...]] = {
         "writer",
     ),
 }
+# 查询中出现这些词，才认为模型真的发起了对应 final-hop 属性搜索。
 ATTRIBUTE_QUERY_TERMS: dict[str, set[str]] = {
     "date": {
         "birth",
@@ -103,6 +112,7 @@ ATTRIBUTE_QUERY_TERMS: dict[str, set[str]] = {
     },
     "creative_role": {"author", "composer", "director", "producer", "writer"},
 }
+# 问题含这些 cue 且模型只搜一次就回答时，更可能是跳过了必要 follow-up。
 EARLY_ANSWER_CUES = (
     "also known as",
     "director",
@@ -130,7 +140,7 @@ EARLY_ANSWER_CUES = (
 
 @dataclass(frozen=True)
 class SearchTurnMatch:
-    """A search turn that satisfies a turn-credit detector."""
+    """命中某个 turn-credit detector 的搜索 turn。"""
 
     turn_index: int
     query: str
@@ -140,7 +150,7 @@ class SearchTurnMatch:
 
 @dataclass(frozen=True)
 class EarlyAnswerRisk:
-    """A final-answer turn that likely stopped before needed follow-up search."""
+    """final-answer turn 是否疑似过早停止。"""
 
     risky: bool
     reasons: tuple[str, ...] = field(default_factory=tuple)
@@ -151,7 +161,11 @@ def find_helpful_bridge_shape_turns(
     events: Iterable[dict[str, Any]],
     question: str,
 ) -> list[SearchTurnMatch]:
-    """Return v1 shape-level follow-up search candidates."""
+    """返回 v1 形状级 follow-up 搜索候选。
+
+    该规则只看第二跳以后是否有新信息词、非重复 query、前一跳有非空结果；它是
+    早期较宽松的 credit 规则。
+    """
     matches: list[SearchTurnMatch] = []
     seen_queries: set[str] = set()
     seen_terms: set[str] = set()
@@ -163,6 +177,8 @@ def find_helpful_bridge_shape_turns(
         query_number = len(seen_queries) + 1
         is_duplicate = normalized_query in seen_queries
         new_terms = terms - seen_terms
+        # follow-up shape 表示 query 相比历史搜索引入了足够新词，并带关系词或
+        # 问题外新实体/属性词。
         has_followup_shape = len(new_terms) >= 2 and (
             bool(terms & FOLLOWUP_CUE_TOKENS) or bool(new_terms - question_terms)
         )
@@ -193,7 +209,7 @@ def find_evidence_bridge_turns(
     question: str,
     answers: Iterable[str],
 ) -> list[SearchTurnMatch]:
-    """Return search turns that connect a prior bridge entity to evidence."""
+    """返回把前一跳 bridge entity 连接到证据的搜索 turn。"""
     materialized = list(events)
     matches: list[SearchTurnMatch] = []
     seen_queries: set[str] = set()
@@ -212,6 +228,8 @@ def find_evidence_bridge_turns(
             and successful_nonempty_tool_event(current_tool_event)
         ):
             reasons: list[str] = []
+            # evidence bridge 要同时满足三件事：query 命中前一跳实体、加入关系/消歧、
+            # 当前 observation 也提供答案或关系证据。三者缺一不加 credit。
             bridge_hit = _query_hits_bridge_entity(
                 query=turn.query,
                 previous_event=previous_tool_event,
@@ -253,7 +271,7 @@ def find_final_hop_attribute_turns(
     question: str,
     answers: Iterable[str],
 ) -> list[SearchTurnMatch]:
-    """Return search turns that add required final-hop attribute evidence."""
+    """返回补齐 final-hop 属性证据的搜索 turn。"""
     materialized = list(events)
     required_attributes = required_final_hop_attributes(question)
     if not required_attributes:
@@ -292,6 +310,8 @@ def find_final_hop_attribute_turns(
                     answers=list(answers),
                 )
             ):
+                # final-hop credit 比 evidence bridge 更收窄：必须查到问题要求的具体
+                # 属性类型，避免奖励普通 biography/泛化搜索。
                 matches.append(
                     SearchTurnMatch(
                         turn_index=turn.turn_index,
@@ -318,7 +338,7 @@ def detect_early_answer_risk(
     search_calls: int,
     stop_reason: str,
 ) -> EarlyAnswerRisk:
-    """Return whether a wrong answer likely stopped before required follow-up."""
+    """判断错误答案是否疑似只搜一跳就过早回答。"""
     if search_calls > 1 or stop_reason != "answer":
         return EarlyAnswerRisk(False)
     if not _has_early_answer_cue(question):
@@ -360,7 +380,7 @@ def detect_missing_final_hop_risk(
     search_calls: int,
     stop_reason: str,
 ) -> EarlyAnswerRisk:
-    """Return whether an answer likely skipped a required final-hop attribute."""
+    """判断 final answer 是否跳过了问题要求的 final-hop 属性查询。"""
     if search_calls <= 0 or stop_reason != "answer":
         return EarlyAnswerRisk(False)
     required_attributes = required_final_hop_attributes(question)
@@ -383,6 +403,7 @@ def detect_missing_final_hop_risk(
     missing = required_attributes - covered
     if not missing:
         return EarlyAnswerRisk(False)
+    # 如果最终答案本身能被 observation 中的属性文本支持，就不再判为缺失 final-hop。
     if _final_answer_is_supported_by_attribute_text(
         final_answer=final_answer,
         attributes=required_attributes,
@@ -402,7 +423,7 @@ def detect_final_answer_guard_risk(
     valid_format: bool,
     exact_match: bool,
 ) -> EarlyAnswerRisk:
-    """Return whether the last assistant turn should be penalized for not answering cleanly."""
+    """判断搜索后最后一轮是否需要因格式/未回答干净而被惩罚。"""
     if exact_match or search_calls <= 0:
         return EarlyAnswerRisk(False)
     if stop_reason == "max_search_calls" and not valid_format:
@@ -413,7 +434,7 @@ def detect_final_answer_guard_risk(
 
 
 def required_final_hop_attributes(question: str) -> set[str]:
-    """Return final-hop attribute types implied by a question."""
+    """从问题文本中抽取所需 final-hop 属性类型。"""
     lowered = question.lower()
     return {
         attribute
@@ -423,7 +444,7 @@ def required_final_hop_attributes(question: str) -> set[str]:
 
 
 def successful_nonempty_tool_event(event: dict[str, Any] | None) -> bool:
-    """Return whether an event is a successful non-empty tool observation."""
+    """判断 tool event 是否成功且至少有一条搜索结果。"""
     if not isinstance(event, dict):
         return False
     if event.get("role") != "tool" or event.get("ok") is not True:
@@ -433,12 +454,12 @@ def successful_nonempty_tool_event(event: dict[str, Any] | None) -> bool:
 
 
 def normalize_query(query: str) -> str:
-    """Normalize query text for duplicate checks."""
+    """归一化 query，用于重复搜索判断。"""
     return " ".join(query.lower().split())
 
 
 def query_terms(query: str) -> set[str]:
-    """Return non-stopword alphanumeric terms from query-like text."""
+    """抽取 query-like 文本中的非停用词字母数字 term。"""
     normalized = "".join(
         char.lower() if char.isalnum() else " " for char in query
     )
@@ -450,13 +471,13 @@ def query_terms(query: str) -> set[str]:
 
 
 def entity_spans(text: str) -> set[str]:
-    """Extract simple title/capitalized entity-like spans."""
+    """抽取简单的大写开头实体候选 span。"""
     spans = {match.strip() for match in ENTITY_PATTERN.findall(text or "")}
     return {span for span in spans if len(query_terms(span)) > 0}
 
 
 def tool_event_text(event: dict[str, Any] | None) -> str:
-    """Return text from a tool event, including item titles and content."""
+    """拼接 tool event 中的 title/source/content/observation 文本。"""
     if not isinstance(event, dict):
         return ""
     parts: list[str] = []
@@ -479,6 +500,7 @@ class _SearchTurn:
 
 
 def _iter_search_turns(events: list[dict[str, Any]]) -> list[_SearchTurn]:
+    """从交替的 assistant/tool events 中抽取搜索 turn 及其紧随 observation。"""
     turns: list[_SearchTurn] = []
     assistant_index = 0
     for index, event in enumerate(events):

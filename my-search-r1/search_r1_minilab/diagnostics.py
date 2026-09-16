@@ -1,4 +1,9 @@
-"""Trajectory behavior diagnostics shared by reports, metrics, and rewards."""
+"""Trajectory 行为诊断。
+
+本文件从统一 trajectory schema 中抽取搜索行为标签：是否直接答题、搜索后答对/
+答错、空结果、重复 query、max-search 未回答等。训练 metrics、reward shaping 和
+Markdown report 都复用这些诊断，保证口径一致。
+"""
 
 from __future__ import annotations
 
@@ -6,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 
+# 用于粗略判断 query 是否包含多跳 follow-up 意图的关系/属性词。
 FOLLOWUP_CUE_TOKENS = {
     "born",
     "birth",
@@ -29,6 +35,7 @@ FOLLOWUP_CUE_TOKENS = {
     "winner",
     "writer",
 }
+# query term 抽取时忽略的常见停用词。
 QUERY_STOPWORDS = {
     "a",
     "an",
@@ -56,7 +63,7 @@ QUERY_STOPWORDS = {
 
 @dataclass(frozen=True)
 class TrajectoryDiagnostics:
-    """Derived behavior flags and counts for one trajectory."""
+    """单条 trajectory 的派生行为标签和计数。"""
 
     direct_correct: bool
     searched_correct: bool
@@ -100,7 +107,7 @@ class TrajectoryDiagnostics:
 
 @dataclass(frozen=True)
 class BehaviorSummary:
-    """Aggregate behavior counts for trajectory collections."""
+    """多条 trajectory 的行为聚合统计。"""
 
     total: int
     direct_correct: int
@@ -121,7 +128,7 @@ class BehaviorSummary:
 
 
 def diagnose_record(record: dict[str, Any]) -> TrajectoryDiagnostics:
-    """Diagnose behavior from a persisted trajectory record."""
+    """从已落盘 trajectory record 诊断行为。"""
     metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
     return diagnose_fields(
         turns=record.get("turns") or [],
@@ -143,7 +150,7 @@ def diagnose_fields(
     question: str = "",
     too_many_search_threshold: int = 3,
 ) -> TrajectoryDiagnostics:
-    """Diagnose behavior from normalized trajectory fields."""
+    """从标准化 trajectory 字段诊断行为。"""
     materialized_turns = [turn for turn in turns if isinstance(turn, dict)]
     queries = _tool_queries(materialized_turns)
     normalized_queries = [_normalize_query(query) for query in queries if query.strip()]
@@ -160,6 +167,7 @@ def diagnose_fields(
     max_search_no_answer = stop_reason == "max_search_calls" and not valid_format
     too_many_search_no_gain = search_calls >= too_many_search_threshold and not exact_match
     helpful_followup_query = _has_helpful_followup_query(question, queries)
+    # bad_max_search_loop 用于区分“必要多跳搜索”与“重复/无增益搜索到上限”。
     bad_max_search_loop = (
         (max_search_no_answer or too_many_search_no_gain)
         and (duplicate_query_count > 0 or not helpful_followup_query)
@@ -184,7 +192,7 @@ def diagnose_fields(
 def summarize_diagnostics(
     diagnostics: Iterable[TrajectoryDiagnostics],
 ) -> BehaviorSummary:
-    """Summarize per-trajectory diagnostics into aggregate counts."""
+    """把逐条 trajectory 诊断聚合为 summary。"""
     items = list(diagnostics)
     return BehaviorSummary(
         total=len(items),
@@ -209,7 +217,7 @@ def summarize_diagnostics(
 def behavior_metrics(
     diagnostics: Iterable[TrajectoryDiagnostics],
 ) -> dict[str, float]:
-    """Return rate metrics for training/eval logging."""
+    """输出训练/评测日志使用的行为 rate metrics。"""
     summary = summarize_diagnostics(diagnostics)
     total = max(summary.total, 1)
     observations = max(summary.tool_observation_count, 1)

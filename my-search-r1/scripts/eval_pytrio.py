@@ -1,4 +1,8 @@
-"""Run Search-R1 MiniLab PyTRIO eval with a pluggable search backend."""
+"""PyTRIO 版 Search-R1 MiniLab 评测入口。
+
+本脚本复用训练级 rollout 状态机，但 group_size 固定为 1，不做参数更新；输出
+trajectory JSONL、Markdown report 和汇总指标，供 checkpoint/base 对照分析。
+"""
 
 from __future__ import annotations
 
@@ -28,7 +32,7 @@ DEFAULT_REPORT_OUTPUT = ROOT / "eval_results" / "report.md"
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse eval, rollout, and backend arguments."""
+    """解析评测、rollout 预算、搜索 backend 和输出路径参数。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", type=Path, default=DEFAULT_DATA)
     parser.add_argument("--offset", type=int, default=0)
@@ -68,7 +72,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Run eval and write trajectory JSONL plus Markdown report."""
+    """运行评测并写出 trajectory JSONL 与 Markdown report。"""
     args = parse_args()
     load_dotenv(args.env_file)
 
@@ -76,6 +80,7 @@ def main() -> None:
     examples = load_examples(args.data, limit=0)
     if args.offset < 0:
         raise ValueError("--offset must be non-negative")
+    # offset/limit 用于真实搜索长评测分片恢复，避免一次失败后整批重跑。
     examples = examples[args.offset :]
     if args.limit > 0:
         examples = examples[: args.limit]
@@ -104,6 +109,7 @@ def main() -> None:
     batches = _chunks(examples, max(args.batch_size, 1))
     with tqdm(total=len(examples), desc="Eval", unit="question") as progress:
         for batch in batches:
+            # eval 不训练，但仍走同一个 rollout_batch，以保证指标口径和训练轨迹一致。
             batch_trajectories = rollout_batch(
                 sampling_client,
                 tokenizer,
@@ -129,6 +135,7 @@ def main() -> None:
 
 
 def _backend_config(args: argparse.Namespace) -> BackendConfig:
+    """把 CLI 参数收拢成共享 BackendConfig。"""
     return BackendConfig(
         backend=args.backend,
         bm25_corpus=args.bm25_corpus,
@@ -142,6 +149,7 @@ def _backend_config(args: argparse.Namespace) -> BackendConfig:
 
 
 def _reward_shaping_config(args: argparse.Namespace) -> RewardShapingConfig:
+    """把 CLI 参数收拢成 RewardShapingConfig，默认保持 base reward。"""
     return RewardShapingConfig(
         duplicate_query_penalty=args.duplicate_query_penalty,
         empty_result_penalty=args.empty_result_penalty,
@@ -157,6 +165,7 @@ def _reward_shaping_config(args: argparse.Namespace) -> RewardShapingConfig:
 
 
 def _chunks(examples: list, size: int) -> list[list]:
+    """按 batch-size 切分评测样本。"""
     return [examples[index : index + size] for index in range(0, len(examples), size)]
 
 

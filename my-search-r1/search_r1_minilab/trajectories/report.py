@@ -1,4 +1,8 @@
-"""Markdown trajectory reports for Search-R1 debugging."""
+"""Search-R1 trajectory Markdown 报告。
+
+报告面向训练/评测复盘：先汇总正确率、格式、搜索次数和工具失败，再按错误类型
+抽样展示 case，帮助区分模型策略问题和搜索 backend 问题。
+"""
 
 from __future__ import annotations
 
@@ -16,7 +20,7 @@ from search_r1_minilab.rewards import extract_answer
 
 @dataclass(frozen=True)
 class TrajectorySummary:
-    """Aggregate trajectory counts and rates."""
+    """trajectory 集合的聚合统计。"""
 
     total: int
     correct: int
@@ -30,7 +34,7 @@ class TrajectorySummary:
 
 
 def classify_trajectory(record: dict[str, Any]) -> set[str]:
-    """Classify one trajectory into report buckets."""
+    """把单条 trajectory 分到多个 report bucket。"""
     labels: set[str] = set()
     diagnostics = diagnose_record(record)
     if record.get("exact_match") is True:
@@ -64,7 +68,7 @@ def classify_trajectory(record: dict[str, Any]) -> set[str]:
 
 
 def summarize_trajectories(records: Iterable[dict[str, Any]]) -> TrajectorySummary:
-    """Build aggregate counts for report headers."""
+    """构造报告头部所需的聚合统计。"""
     materialized = list(records)
     label_counts: Counter[str] = Counter()
     reward_sum = 0.0
@@ -98,7 +102,7 @@ def build_markdown_report(
     title: str = "Trajectory Report",
     max_examples_per_section: int = 3,
 ) -> str:
-    """Render trajectory records as a compact Markdown report."""
+    """把 trajectory records 渲染为紧凑 Markdown 报告。"""
     materialized = list(records)
     summary = summarize_trajectories(materialized)
     lines = [

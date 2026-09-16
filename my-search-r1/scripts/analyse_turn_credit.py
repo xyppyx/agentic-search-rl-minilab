@@ -1,4 +1,8 @@
-"""Analyze turn-level credit heuristics over persisted trajectory JSONL."""
+"""离线分析已落盘 trajectory 的 turn-level credit 命中情况。
+
+该脚本不训练模型，只复用 turn_credit.py 的 detector，统计哪些轨迹会命中
+helpful/evidence/final-hop credit 或 early-answer/final-answer guard penalty。
+"""
 
 from __future__ import annotations
 
@@ -27,6 +31,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INPUT = ROOT / "eval_results" / "trajectories.jsonl"
 DEFAULT_JSONL_OUTPUT = ROOT / "eval_results" / "turn_credit_analysis.jsonl"
 DEFAULT_REPORT_OUTPUT = ROOT / "eval_results" / "turn_credit_analysis.md"
+# 复盘文档中反复追踪的代表性 case，用于报告中单独标记。
 KEY_CASE_IDS = {
     "dev_174",
     "dev_2429",
@@ -38,7 +43,7 @@ KEY_CASE_IDS = {
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse CLI arguments."""
+    """解析输入 JSONL 和分析报告输出路径。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
     parser.add_argument("--jsonl-output", type=Path, default=DEFAULT_JSONL_OUTPUT)
@@ -49,11 +54,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def analyze_record(record: dict[str, Any]) -> dict[str, Any]:
-    """Return turn-credit analysis for one trajectory record."""
+    """分析单条 trajectory 的 turn-credit 候选与训练可应用标签。"""
     metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
     record_id = str(metadata.get("id") or record.get("id") or "")
     exact_match = record.get("exact_match") is True
     valid_format = record.get("valid_format") is True
+    # 正向 turn credit 只在“格式正确但答案错误”的轨迹上训练使用；正确轨迹已由
+    # trajectory-level reward 奖励，格式错误轨迹优先修格式。
     wrong_valid = valid_format and not exact_match
     turns = [turn for turn in record.get("turns") or [] if isinstance(turn, dict)]
     question = str(record.get("question") or "")
@@ -132,12 +139,12 @@ def analyze_record(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def analyze_records(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Analyze all records."""
+    """批量分析 trajectory records。"""
     return [analyze_record(record) for record in records]
 
 
 def build_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
-    """Return aggregate counts and buckets."""
+    """汇总 turn-credit 命中数量和错误类型 bucket。"""
     total = len(items)
     wrong_valid = sum(item["valid_format"] and not item["exact_match"] for item in items)
     bucket_counts: Counter[str] = Counter()

@@ -1,4 +1,8 @@
-"""Shared search backend interfaces and result types."""
+"""搜索工具层的通用接口与统一结果类型。
+
+所有 backend 都要输出 SearchResult，使 rollout/report 能用同一套字段记录成功、
+空结果、超时、限流和其它错误。
+"""
 
 from __future__ import annotations
 
@@ -8,7 +12,7 @@ from typing import Any, Protocol
 
 @dataclass(frozen=True)
 class SearchItem:
-    """One normalized search result item."""
+    """一条标准化搜索结果。"""
 
     title: str
     content: str
@@ -19,7 +23,7 @@ class SearchItem:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize the item for trajectory JSONL."""
+        """序列化为 trajectory JSONL 字段。"""
         return {
             "id": self.id,
             "title": self.title,
@@ -33,7 +37,7 @@ class SearchItem:
 
 @dataclass(frozen=True)
 class SearchResult:
-    """Normalized search result or failure."""
+    """一次搜索调用的标准化成功结果或失败结果。"""
 
     ok: bool
     items: list[SearchItem]
@@ -45,7 +49,7 @@ class SearchResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize the result for trajectory JSONL."""
+        """序列化为 trajectory JSONL 字段。"""
         return {
             "ok": self.ok,
             "items": [item.to_dict() for item in self.items],
@@ -59,20 +63,20 @@ class SearchResult:
 
 
 class SearchBackend(Protocol):
-    """Minimal interface expected by rollout code."""
+    """rollout 层依赖的最小搜索 backend 协议。"""
 
     name: str
 
     def search(self, query: str) -> SearchResult:
-        """Search for evidence with a single query."""
+        """用单个 query 检索证据。"""
 
     def metrics(self) -> dict[str, float]:
-        """Return cumulative backend metrics."""
+        """返回累计 backend 指标。"""
 
 
 @dataclass
 class SearchStats:
-    """Backend-level counters with common metric names."""
+    """backend 级别计数器，产出统一 metric 名。"""
 
     requests: int = 0
     successes: int = 0
@@ -84,7 +88,7 @@ class SearchStats:
     latency_total: float = 0.0
 
     def observe(self, result: SearchResult) -> None:
-        """Update counters from a normalized result."""
+        """根据一次标准化搜索结果更新计数器。"""
         self.requests += 1
         self.latency_total += result.latency
         if result.ok:
@@ -102,7 +106,7 @@ class SearchStats:
             self.errors += 1
 
     def metrics(self, prefix: str) -> dict[str, float]:
-        """Return rates and average latency with a caller-provided prefix."""
+        """按调用方 prefix 返回成功率、错误率和平均延迟。"""
         denominator = max(self.requests, 1)
         return {
             f"{prefix}/requests": float(self.requests),
@@ -117,7 +121,7 @@ class SearchStats:
 
 
 def format_item(item: SearchItem, index: int) -> str:
-    """Format a result item as tool-observation text."""
+    """把搜索结果格式化为模型可读的 tool observation 文本。"""
     return (
         f"[{index}] Title: {item.title}\n"
         f"    Content: {item.content}\n"
@@ -127,7 +131,7 @@ def format_item(item: SearchItem, index: int) -> str:
 
 
 def empty_success(query: str, backend: str, latency: float) -> SearchResult:
-    """Return a successful empty result with explicit metadata."""
+    """构造一次成功但无结果的搜索返回，并显式记录 query。"""
     return SearchResult(
         ok=True,
         items=[],

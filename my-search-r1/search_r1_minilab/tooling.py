@@ -1,4 +1,8 @@
-"""Shared backend construction for MiniLab scripts."""
+"""训练、评测和 smoke 脚本共用的搜索 backend 构造逻辑。
+
+脚本层只传入 BackendConfig；这里负责选择真实/离线/mock backend，并按需套上
+failure injection wrapper。这样 rollout 不需要知道具体搜索服务的初始化细节。
+"""
 
 from __future__ import annotations
 
@@ -22,7 +26,7 @@ BACKEND_CHOICES = ("local_bm25", "mock_search", "zhihu_search")
 
 @dataclass(frozen=True)
 class BackendConfig:
-    """Configuration for one dispatch backend."""
+    """单个搜索 backend 的运行配置。"""
 
     backend: str = "local_bm25"
     bm25_corpus: str | Path | None = None
@@ -35,7 +39,7 @@ class BackendConfig:
 
 
 def build_backend(config: BackendConfig) -> SearchBackend:
-    """Build one named backend, preserving its dispatch name under failure injection."""
+    """构造一个命名 backend，并在 failure injection 下保留原 dispatch 名。"""
     if config.backend == "local_bm25":
         if config.bm25_corpus is None:
             raise ValueError("local_bm25 requires bm25_corpus")
@@ -65,19 +69,21 @@ def build_backend(config: BackendConfig) -> SearchBackend:
             failure_config.p_rate_limited,
         )
     ):
+        # wrapper 的 name 仍使用底层 backend.name，保证 registry.call(args.backend)
+        # 在注入故障后仍能按同一个工具名分发。
         backend = FailureWrapperBackend(backend, failure_config, name=backend.name)
     return backend
 
 
 def build_registry(config: BackendConfig) -> ToolRegistry:
-    """Build a registry with exactly one configured dispatch backend."""
+    """构造只注册当前 backend 的 ToolRegistry。"""
     registry = ToolRegistry()
     registry.register(build_backend(config))
     return registry
 
 
 def default_mock_backend() -> MockSearchBackend:
-    """Return a small deterministic backend for tests and smoke runs."""
+    """返回小型确定性 mock backend，用于单测和无需外部服务的 smoke。"""
     return MockSearchBackend.from_pairs(
         {
             "little prince": [

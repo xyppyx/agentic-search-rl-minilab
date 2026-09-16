@@ -1,4 +1,9 @@
-"""Train Search-R1 MiniLab with PyTRIO GRPO and pluggable search backends."""
+"""PyTRIO 版 Search-R1 MiniLab 训练入口。
+
+本脚本把数据读取、搜索 backend、rollout、turn-level credit、KL/reference、
+gated OPSD、自定义 backward、checkpoint 和 SwanLab 日志串成完整训练循环。
+核心算法实现仍在 search_r1_minilab/rollout.py 与 training.py。
+"""
 
 from __future__ import annotations
 
@@ -42,11 +47,14 @@ from search_r1_minilab.trajectories import build_markdown_report, write_trajecto
 
 
 ROOT = Path(__file__).resolve().parents[1]
+# 默认值优先支持本地 smoke：不依赖真实搜索 API，也不强制打开 SwanLab。
 DEFAULT_DATA = ROOT / "tests" / "fixtures" / "smoke_eval.jsonl"
 DEFAULT_BM25_CORPUS = ROOT / "tests" / "fixtures" / "bm25_corpus.jsonl"
 DEFAULT_ENV_FILE = ROOT / ".env"
 DEFAULT_OUTPUT_DIR = ROOT / "outputs" / "train_pytrio"
 DEFAULT_SWANLAB_PROJECT = "llm-agent-rl-lab-search-r1"
+
+# 当前稳定训练默认配置：标准化 advantage、ratio clip、reference drift KL 和小学习率。
 DEFAULT_ADVANTAGE_NORMALIZATION = "standardize"
 DEFAULT_ADVANTAGE_CLIP = 2.0
 DEFAULT_KL_COEF = 0.01
@@ -56,7 +64,7 @@ _SWANLAB_MODULE: Any | None = None
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse train, rollout, backend, and logging arguments."""
+    """解析训练、rollout、reward、turn credit、OPSD、backend 和日志参数。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--max-steps", type=int, required=True)
     parser.add_argument("--data", type=Path, default=DEFAULT_DATA)
@@ -105,6 +113,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kl-coef", type=float, default=DEFAULT_KL_COEF)
     parser.add_argument("--policy-ratio-clip", type=float, default=DEFAULT_POLICY_RATIO_CLIP)
     parser.add_argument("--reference-model-path")
+    # OPSD 默认关闭；开启后默认只蒸馏 credited_turns 且要求 positive_advantage。
     parser.add_argument("--opsd-coef", type=float, default=0.0)
     parser.add_argument(
         "--opsd-context-policy",
@@ -147,7 +156,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main(args: argparse.Namespace | None = None) -> None:
-    """Run the full on-policy training loop."""
+    """运行完整 on-policy 训练循环。"""
     args = args or parse_args()
     load_dotenv(args.env_file)
     args.swanlab_project = _resolve_swanlab_project(args.swanlab_project)
@@ -203,6 +212,8 @@ def main(args: argparse.Namespace | None = None) -> None:
     )
     reference_client = None
     if args.kl_coef > 0.0 or opsd_config.coef > 0.0:
+        # KL 和 OPSD 共用 reference/sampling client：KL 用它做 frozen reference，
+        # OPSD same-context teacher 也用它计算已采样 token 的 teacher logprob。
         reference_client = service_client.create_sampling_client(
             base_model=args.base_model,
             model_path=args.reference_model_path,
@@ -220,6 +231,8 @@ def main(args: argparse.Namespace | None = None) -> None:
                     args.questions_per_batch,
                 )
                 train_bar.set_postfix(phase="prepare sampler", refresh=True)
+                # 每个 step 先保存当前训练权重并拿到 sampling client，保证 rollout 来自
+                # 当前 policy，符合 on-policy GRPO。
                 sampling_client = training_client.save_weights_and_get_sampling_client()
 
                 train_bar.set_postfix(phase="rollout", refresh=True)
@@ -241,6 +254,8 @@ def main(args: argparse.Namespace | None = None) -> None:
                     )
 
                 train_bar.set_postfix(phase="build datums", refresh=True)
+                # build_training_datums 内部会先应用 turn-level credit，再把 turn 级
+                # effective_advantage 展开成 token 级 advantage/OPSD mask。
                 datums = build_training_datums(
                     trajectories,
                     turn_credit_config,
@@ -270,11 +285,15 @@ def main(args: argparse.Namespace | None = None) -> None:
                 train_bar.set_postfix(phase="backward", refresh=True)
                 trainer_results = []
                 for micro_batch in micro_batches:
+                    # micro-batch 需要按全 rollout batch 样本数缩放 advantage，否则梯度累积
+                    # 会改变 loss 的整体尺度。
                     weighted_items = weight_micro_batch_items_for_global_mean(
                         micro_batch,
                         total_samples=len(trajectories),
                     )
                     if args.kl_coef > 0.0 or opsd_config.coef > 0.0:
+                        # 启用 KL/OPSD 时走 custom loss，PyTRIO forward 只负责给当前
+                        # policy logprobs，GRPO/KL/OPSD 都在闭包里计算。
                         result = training_client.forward_backward_custom(
                             build_custom_forward_datums(weighted_items),
                             make_grpo_kl_loss_fn(
@@ -318,6 +337,7 @@ def main(args: argparse.Namespace | None = None) -> None:
                     train_bar.set_postfix(phase="optimizer", refresh=True)
                     training_client.optim_step(adam_params).result()
 
+                # 每 step 同时记录 rollout 行为指标、tool 指标和 trainer loss 指标。
                 metrics = rollout_metrics(
                     trajectories,
                     datums,

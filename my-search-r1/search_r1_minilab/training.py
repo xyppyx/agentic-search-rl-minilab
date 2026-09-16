@@ -1,4 +1,9 @@
-"""PyTRIO GRPO training helpers for Search-R1 MiniLab."""
+"""PyTRIO GRPO 训练辅助逻辑。
+
+本文件承接 rollout 产出的 Trajectory，并完成训练前的关键转换：turn-level
+credit、token-level datum 构造、micro-batch 装箱、reference/teacher logprob
+对齐，以及 GRPO + KL + gated OPSD 的 custom loss。
+"""
 
 from __future__ import annotations
 
@@ -22,22 +27,32 @@ from search_r1_minilab.turn_credit import (
 )
 
 
+# 训练 datum 和 micro-batch 的安全上限；超过上限时宁可跳过/拆分，也不让 PyTRIO
+# 后端收到过长上下文或 padding 爆炸的 batch。
 MAX_TRAIN_CONTEXT_TOKENS = 8192
 MAX_MICRO_BATCH_ITEMS = 32
 MAX_MICRO_BATCH_PADDED_TOKENS = 64_000
+
+# turn credit policy 决定是否把 trajectory-level advantage 改写为 turn-level
+# effective_advantage；当前最终路线使用 final_hop_bridge。
 TURN_CREDIT_POLICIES = {
     "none",
     "helpful_bridge",
     "evidence_bridge",
     "final_hop_bridge",
 }
+# 当前 OPSD 只支持 same_context teacher：teacher 在同一条 rollout 上给已采样 token
+# 计算 logprob，不构造 gold-answer 或改写上下文。
 OPSD_CONTEXT_POLICIES = {"same_context"}
+
+# mask policy 决定哪些 assistant turn 可以被 OPSD 蒸馏。
 OPSD_MASK_POLICIES = {
     "none",
     "final_answer",
     "credited_turns",
     "final_and_credited",
 }
+# positive policy 是 OPSD 的第二道 gate，避免蒸馏负优势或错误轨迹。
 OPSD_POSITIVE_POLICIES = {
     "all",
     "positive_advantage",
@@ -48,7 +63,11 @@ OPSD_POSITIVE_POLICIES = {
 
 @dataclass(frozen=True)
 class TurnCreditConfig:
-    """Optional turn-level training credit for useful search actions."""
+    """turn-level credit 配置。
+
+    bonus 用于奖励有价值搜索 turn，penalty 用于惩罚过早回答、缺 final-hop 或搜索后
+    格式不干净的 final turn。
+    """
 
     policy: str = "none"
     helpful_search_turn_bonus: float = 0.0
@@ -80,7 +99,7 @@ class TurnCreditConfig:
 
 @dataclass(frozen=True)
 class OPSDConfig:
-    """Optional gated on-policy self-distillation auxiliary objective."""
+    """gated on-policy self-distillation 辅助目标配置。"""
 
     coef: float = 0.0
     context_policy: str = "same_context"
@@ -106,7 +125,11 @@ class OPSDConfig:
 
 
 class TrainingDatum:
-    """A PyTRIO datum plus its unpadded sequence length."""
+    """PyTRIO datum 及其额外训练元数据。
+
+    reference_logprobs 用于 KL drift penalty；opsd_logprobs 和 opsd_mask 用于 gated
+    OPSD。num_tokens 是未 padding 的长度，供 micro-batch 装箱使用。
+    """
 
     def __init__(
         self,
@@ -130,7 +153,7 @@ def build_datum(
     opsd_mask_policy: str = "none",
     opsd_positive_policy: str = "all",
 ) -> TrainingDatum:
-    """Convert one rollout trajectory into one PyTRIO training datum."""
+    """把一条 rollout trajectory 转成 PyTRIO training datum。"""
     if opsd_mask_policy not in OPSD_MASK_POLICIES:
         raise ValueError(
             "OPSD mask policy must be 'none', 'final_answer', "
@@ -165,6 +188,8 @@ def build_datum(
                 f"assistant turn {turn_index + 1} prompt is not a trajectory prefix"
             )
 
+        # 默认所有 assistant token 使用 trajectory-level advantage；turn credit 命中后
+        # 会把单个 turn 的 effective_advantage 改成更细粒度的奖励/惩罚。
         turn_advantage = (
             trajectory.advantage
             if turn.effective_advantage is None
@@ -172,6 +197,8 @@ def build_datum(
         )
         full_tokens.extend(delta_observation)
         full_tokens.extend(turn.completion_tokens)
+        # OPSD mask 只可能覆盖 assistant completion token，observation/prompt token
+        # 始终为 0，避免把工具返回文本也当成策略输出蒸馏。
         turn_opsd_mask = (
             1.0
             if _opsd_turn_selected(
@@ -201,6 +228,8 @@ def build_datum(
     ):
         raise ValueError("trajectory token/logprob/advantage/OPSD mask lengths differ")
 
+    # PyTRIO loss 使用 next-token prediction，因此所有 token-level 字段都要右移：
+    # input_tokens 预测 target_tokens，对应的 old_logprobs/advantages/mask 也对齐 target。
     input_tokens = full_tokens[:-1]
     target_tokens = full_tokens[1:]
     old_logprobs = old_logprobs_by_token[1:]
@@ -235,7 +264,7 @@ def build_training_datums(
     opsd_mask_policy: str = "none",
     opsd_positive_policy: str = "all",
 ) -> list[TrainingDatum]:
-    """Build datums for trajectories with non-zero group-relative advantages."""
+    """为一批 trajectory 构造非零 loss token 的 training datums。"""
     apply_turn_credit(trajectories, turn_credit or TurnCreditConfig())
     datums: list[TrainingDatum] = []
     for trajectory in trajectories:
@@ -254,8 +283,9 @@ def apply_turn_credit(
     trajectories: list[Trajectory],
     config: TurnCreditConfig,
 ) -> None:
-    """Assign effective per-turn advantages for optional search-action credit."""
+    """按配置为每个 assistant turn 分配 effective_advantage。"""
     for trajectory in trajectories:
+        # 每轮重置，保证重复构造 datums 或离线分析时不会带入上一次 credit 标记。
         for turn in trajectory.turns:
             turn.effective_advantage = trajectory.advantage
             turn.credit_label = ""
@@ -275,6 +305,7 @@ def apply_turn_credit(
 
 
 def _apply_helpful_bridge_credit(trajectory: Trajectory, bonus: float) -> None:
+    """应用早期 helpful_bridge 形状级搜索奖励。"""
     if trajectory.exact_match or not trajectory.valid_format:
         return
 
@@ -296,6 +327,7 @@ def _apply_evidence_bridge_credit(
     trajectory: Trajectory,
     config: TurnCreditConfig,
 ) -> None:
+    """应用 evidence_bridge 搜索奖励和 early answer 惩罚。"""
     if not trajectory.valid_format or trajectory.exact_match:
         return
 
@@ -348,10 +380,12 @@ def _apply_final_hop_bridge_credit(
     trajectory: Trajectory,
     config: TurnCreditConfig,
 ) -> None:
+    """应用当前主线 final-hop bridge credit/guard 策略。"""
     if trajectory.exact_match:
         return
 
     final_turn_index = _final_answer_turn_index(trajectory.events)
+    # final_answer_guard 先执行：即使 final answer 格式错误，也要能惩罚“搜索后没干净回答”。
     if (
         final_turn_index is not None
         and config.final_answer_guard_turn_penalty > 0.0
@@ -378,6 +412,7 @@ def _apply_final_hop_bridge_credit(
     if not trajectory.valid_format:
         return
 
+    # 正向 credit 只给格式有效但 EM 错误的轨迹，目标是保留错误轨迹中的好搜索动作。
     if config.evidence_search_turn_bonus > 0.0:
         for match in find_evidence_bridge_turns(
             events=trajectory.events,
@@ -417,6 +452,7 @@ def _apply_final_hop_bridge_credit(
     if final_turn_index is None:
         return
 
+    # 负向 credit 写在 final turn 上，训练时会降低该 final answer token 的优势。
     if config.early_answer_turn_penalty > 0.0:
         risk = detect_early_answer_risk(
             events=trajectory.events,
@@ -473,6 +509,7 @@ def _apply_turn_label(
     effective_advantage: float,
     bonus: float,
 ) -> None:
+    """把 credit 标签写入 turn，并同步写入 events 方便 JSONL/report 复盘。"""
     if turn_index >= len(trajectory.turns):
         return
     turn = trajectory.turns[turn_index]
@@ -548,6 +585,7 @@ def _opsd_turn_selected(
     positive_policy: str,
     turn_advantage: float,
 ) -> bool:
+    """判断当前 turn 是否进入 OPSD token mask。"""
     if policy == "none":
         return False
     turn = trajectory.turns[turn_index]
@@ -574,6 +612,7 @@ def _opsd_positive_gate(
     *,
     turn_advantage: float,
 ) -> bool:
+    """OPSD 正向 gate，避免无条件蒸馏坏轨迹或负优势 turn。"""
     if policy == "all":
         return True
     if policy == "positive_advantage":
@@ -597,18 +636,18 @@ def _is_final_answer_turn(events: list[dict[str, Any]], turn_index: int) -> bool
 
 
 def datum_size(item: TrainingDatum) -> int:
-    """Return the unpadded datum token length."""
+    """返回未 padding 的 datum token 长度。"""
     return item.num_tokens
 
 
 def datum_loss_token_count(item: TrainingDatum) -> int:
-    """Count target tokens that participate in policy loss."""
+    """统计真正参与 policy loss 的 target token 数。"""
     advantages = _to_numpy(item.datum.loss_fn_inputs["advantages"])
     return int(np.count_nonzero(advantages))
 
 
 def pack_micro_batches(datums: list[TrainingDatum]) -> list[list[TrainingDatum]]:
-    """Pack variable-length datums with first-fit decreasing."""
+    """用 first-fit decreasing 对变长 datums 做 micro-batch 装箱。"""
     batches: list[list[TrainingDatum]] = []
     batch_max_tokens: list[int] = []
     for item in sorted(datums, key=datum_size, reverse=True):
@@ -618,6 +657,7 @@ def pack_micro_batches(datums: list[TrainingDatum]) -> list[list[TrainingDatum]]
             next_items = len(batch) + 1
             next_max_tokens = max(batch_max_tokens[index], item.num_tokens)
             next_padded_tokens = next_items * next_max_tokens
+            # padding 后 token 总量才是显存/后端成本关键，因此同时限制条数和 padded tokens。
             if (
                 next_items <= MAX_MICRO_BATCH_ITEMS
                 and next_padded_tokens <= MAX_MICRO_BATCH_PADDED_TOKENS
@@ -635,7 +675,7 @@ def weight_micro_batch_for_global_mean(
     micro_batch: list[TrainingDatum],
     total_samples: int,
 ) -> list[trio.Datum]:
-    """Scale micro-batch advantages so accumulated means equal the global mean."""
+    """缩放 micro-batch advantage，使梯度累积后等价于整批求均值。"""
     return [
         item.datum
         for item in weight_micro_batch_items_for_global_mean(micro_batch, total_samples)
@@ -646,7 +686,7 @@ def weight_micro_batch_items_for_global_mean(
     micro_batch: list[TrainingDatum],
     total_samples: int,
 ) -> list[TrainingDatum]:
-    """Scale advantages and preserve local metadata for custom losses."""
+    """缩放 advantage，同时保留 reference/OPSD 等自定义 loss 元数据。"""
     if not micro_batch:
         return []
     if total_samples <= 0:
@@ -682,7 +722,7 @@ def add_reference_logprobs(
     datums: list[TrainingDatum],
     reference_client: Any,
 ) -> list[TrainingDatum]:
-    """Attach frozen reference-policy logprobs aligned to each shifted target token."""
+    """为 datum 附加 frozen reference policy 的 shifted target logprobs。"""
     return [
         TrainingDatum(
             item.datum,
@@ -699,8 +739,9 @@ def compute_reference_logprobs(
     item: TrainingDatum,
     reference_client: Any,
 ) -> list[float]:
-    """Compute reference logprobs for one already-shifted training datum."""
+    """计算一个已 shift datum 的 reference logprobs。"""
     advantages = _to_numpy(item.datum.loss_fn_inputs["advantages"])
+    # KL 只要求 trainable token 有 reference logprob；非训练 token 缺失时可填 0。
     required_mask = [float(value) != 0.0 for value in advantages]
     return _compute_shifted_logprobs(
         item,
@@ -716,12 +757,13 @@ def add_opsd_teacher_logprobs(
     *,
     min_teacher_logprob: float | None = None,
 ) -> list[TrainingDatum]:
-    """Attach OPSD teacher logprobs aligned to each shifted target token."""
+    """为 datum 附加 OPSD teacher logprobs，并按 teacher 置信度收窄 mask。"""
     updated: list[TrainingDatum] = []
     for item in datums:
         opsd_logprobs = compute_opsd_teacher_logprobs(item, teacher_client)
         opsd_mask = list(_require_opsd_mask(item))
         if min_teacher_logprob is not None:
+            # min_teacher_logprob 是保守 gate：teacher 自己概率太低的 token 不蒸馏。
             opsd_mask = [
                 mask if logprob >= min_teacher_logprob else 0.0
                 for mask, logprob in zip(opsd_mask, opsd_logprobs, strict=True)
@@ -742,8 +784,9 @@ def compute_opsd_teacher_logprobs(
     item: TrainingDatum,
     teacher_client: Any,
 ) -> list[float]:
-    """Compute OPSD teacher logprobs for masked shifted target tokens."""
+    """计算 OPSD mask token 所需的 teacher logprobs。"""
     opsd_mask = _require_opsd_mask(item)
+    # OPSD 只强制 masked token 有 teacher logprob；未选 token 可填 0。
     required_mask = [float(value) != 0.0 for value in opsd_mask]
     return _compute_shifted_logprobs(
         item,
@@ -760,7 +803,7 @@ def _compute_shifted_logprobs(
     required_mask: list[bool],
     missing_message: str,
 ) -> list[float]:
-    """Compute model logprobs aligned to each already-shifted target token."""
+    """调用 logprob client，并把返回值对齐到已 shift 的 target token。"""
     input_tokens = [int(token) for token in item.datum.model_input.tolist()]
     target_tokens = [
         int(token) for token in _to_numpy(item.datum.loss_fn_inputs["target_tokens"])
@@ -772,6 +815,8 @@ def _compute_shifted_logprobs(
     if len(required_mask) != len(target_tokens):
         raise ValueError("required logprob mask length does not match target tokens")
 
+    # compute_logprobs 接收完整序列，返回每个位置 token 的 logprob；丢掉第一个位置后
+    # 才与 target_tokens 一一对齐。
     full_tokens = [*input_tokens, target_tokens[-1]]
     all_logprobs = logprob_client.compute_logprobs(
         trio.ModelInput.from_ints(full_tokens)
@@ -801,7 +846,7 @@ def _require_opsd_mask(item: TrainingDatum) -> list[float]:
 
 
 def build_custom_forward_datums(items: list[TrainingDatum]) -> list[trio.Datum]:
-    """Strip custom metadata before PyTRIO cross-entropy forward."""
+    """送入 PyTRIO forward 时只保留 target_tokens，其它 loss 元数据留在闭包里。"""
     return [
         trio.Datum(
             model_input=item.datum.model_input,
@@ -824,7 +869,7 @@ def make_grpo_kl_loss_fn(
     opsd_logprobs_list: list[list[float]] | None = None,
     opsd_mask_list: list[list[float]] | None = None,
 ) -> Callable[[list[trio.Datum], list[Any]], tuple[Any, dict[str, float]]]:
-    """Create a custom GRPO loss with sampled-token reference logprob drift penalty."""
+    """创建 GRPO + reference drift KL + gated OPSD 的 custom loss。"""
     if kl_coef < 0.0:
         raise ValueError("kl_coef must be non-negative")
     if policy_ratio_clip < 0.0:
@@ -896,6 +941,7 @@ def make_grpo_kl_loss_fn(
             if reference is not None and len(reference) != len(current):
                 raise ValueError("GRPO KL reference field must match current length")
 
+            # importance ratio 使用当前策略 logprob 与采样时 old logprob 的差。
             ratio = torch.exp(current - old)
             effective_ratio = ratio
             if policy_ratio_clip > 0.0:
@@ -905,12 +951,15 @@ def make_grpo_kl_loss_fn(
                     max=1.0 + policy_ratio_clip,
                 )
 
+            # advantage 为 0 的 token 是 prompt/tool observation 或无训练信号 token。
             train_mask = advantages != 0.0
             objective = effective_ratio * advantages
             datum_loss = -objective.sum()
             if torch.any(train_mask) and kl_coef > 0.0:
                 if reference is None:
                     raise ValueError("KL training requires reference logprobs")
+                # sampled-token logprob drift 的二次惩罚，用于约束当前策略不要在训练
+                # token 上偏离 frozen reference 太远。
                 logprob_drift = current - reference
                 kl_penalty = 0.5 * logprob_drift.pow(2)
                 datum_loss = datum_loss + kl_coef * kl_penalty[train_mask].sum()
@@ -939,6 +988,8 @@ def make_grpo_kl_loss_fn(
                 )
                 if not (len(current) == len(teacher) == len(opsd_mask)):
                     raise ValueError("OPSD datum fields must have the same length")
+                # selected token 已经过 mask policy、positive gate 和可选 teacher
+                # logprob gate；这里只聚合被选中的当前 logprob。
                 selected = opsd_mask != 0.0
                 if torch.any(selected):
                     selected_current = current[selected]
@@ -953,6 +1004,8 @@ def make_grpo_kl_loss_fn(
         opsd_loss_value = 0.0
         if opsd_coef > 0.0 and opsd_current_chunks:
             opsd_current = torch.cat(opsd_current_chunks)
+            # same-context OPSD 当前实现等价于在 gated token 上提升当前策略 logprob；
+            # teacher logprob 主要用于对齐检查、mask 收窄和指标观测。
             opsd_loss = -opsd_current.mean()
             loss = loss + opsd_coef * opsd_loss
             opsd_loss_value = float(opsd_loss.detach().item())
@@ -999,7 +1052,7 @@ def make_grpo_kl_loss_fn(
 
 
 def loss_input_float_lists(items: list[TrainingDatum], key: str) -> list[list[float]]:
-    """Read one float loss-input field from a list of training datums."""
+    """从 TrainingDatum 批量读取 float loss input 字段。"""
     values: list[list[float]] = []
     for item in items:
         values.append([float(value) for value in _to_numpy(item.datum.loss_fn_inputs[key])])
@@ -1007,7 +1060,7 @@ def loss_input_float_lists(items: list[TrainingDatum], key: str) -> list[list[fl
 
 
 def opsd_logprob_float_lists(items: list[TrainingDatum]) -> list[list[float]]:
-    """Read OPSD teacher logprobs from training datums."""
+    """从 TrainingDatum 批量读取 OPSD teacher logprobs。"""
     values: list[list[float]] = []
     for item in items:
         if item.opsd_logprobs is None:
@@ -1017,7 +1070,7 @@ def opsd_logprob_float_lists(items: list[TrainingDatum]) -> list[list[float]]:
 
 
 def opsd_mask_float_lists(items: list[TrainingDatum]) -> list[list[float]]:
-    """Read OPSD token masks from training datums."""
+    """从 TrainingDatum 批量读取 OPSD token mask。"""
     values: list[list[float]] = []
     for item in items:
         values.append([float(value) for value in _require_opsd_mask(item)])
@@ -1025,7 +1078,7 @@ def opsd_mask_float_lists(items: list[TrainingDatum]) -> list[list[float]]:
 
 
 def mean(values: list[float]) -> float:
-    """Return the arithmetic mean or zero for empty inputs."""
+    """返回算术平均值；空列表返回 0。"""
     return sum(values) / len(values) if values else 0.0
 
 

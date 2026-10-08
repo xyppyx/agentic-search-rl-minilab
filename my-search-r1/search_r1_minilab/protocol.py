@@ -79,6 +79,26 @@ def initial_messages(question: str) -> list[dict[str, Any]]:
     ]
 
 
+def teacher_messages_with_skill(
+    messages: list[dict[str, Any]], skill_context: str
+) -> list[dict[str, Any]]:
+    """Add a teacher-only rule to the system message without changing rollout history."""
+    if not skill_context.strip():
+        raise ValueError("teacher skill must be nonempty")
+    if len(messages) < 2 or messages[0].get("role") != "system" or messages[1].get("role") != "user":
+        raise ValueError("teacher history must start with system and user messages")
+    return [
+        {
+            **messages[0],
+            "content": (
+                f"{messages[0]['content']}\n\n"
+                f"Teacher-only search skill:\n{skill_context.strip()}"
+            ),
+        },
+        *messages[1:],
+    ]
+
+
 def build_prompt(tokenizer: Any, messages: list[dict[str, Any]]) -> list[int]:
     """用模型 chat template 渲染 messages，并注入 search tool 定义。"""
     return _render_chat(tokenizer, messages, add_generation_prompt=True)

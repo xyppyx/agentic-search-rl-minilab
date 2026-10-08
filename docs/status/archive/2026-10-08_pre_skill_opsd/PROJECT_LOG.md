@@ -51,8 +51,3 @@
 - 按用户要求整理 Git 与项目文档，准备后续实验前的状态压缩。
 - 在 `docs/status/archive/2026-09-16_pre_next_experiments/` 保存压缩前 `PROJECT_COMPLETED.md`、`PROJECT_TODO.md`、`PROJECT_LOG.md` 和根 README 快照。
 - 当前 status 收敛为：最终路线与 baseline、下一步验证补强、训练扩量门槛和公开边界；旧 run 流水账继续只在 archive 中追溯。
-
-## 2026-10-08
-
-- 按用户要求从 same-context OPSD-like 的方法开发切换到 Skill 条件 OPSD；切换前状态快照保存于 `docs/status/archive/2026-10-08_pre_skill_opsd/`。
-- 决策：旧 guard-fix + gated OPSD v2 路线只作为已验证 baseline；新方法默认使用同一步策略快照作为 Skill teacher、signed-gap gate 和无 Skill student rollout，旧路径仅用于显式对照。新方法先做离线 gap 审计，再考虑训练；旧指标不得迁移归因。

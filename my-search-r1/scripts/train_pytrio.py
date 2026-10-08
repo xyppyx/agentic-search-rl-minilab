@@ -1,13 +1,14 @@
 """PyTRIO 版 Search-R1 MiniLab 训练入口。
 
 本脚本把数据读取、搜索 backend、rollout、turn-level credit、KL/reference、
-gated OPSD、自定义 backward、checkpoint 和 SwanLab 日志串成完整训练循环。
+Skill OPSD、自定义 backward、checkpoint 和 SwanLab 日志串成完整训练循环。
 核心算法实现仍在 search_r1_minilab/rollout.py 与 training.py。
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,19 +22,23 @@ from tqdm import tqdm
 from search_r1_minilab.data import shuffled_examples, take_batch
 from search_r1_minilab.rewards import RewardShapingConfig
 from search_r1_minilab.rollout import RolloutConfig, rollout_batch, trajectory_to_record
+from search_r1_minilab.skills import load_skill_bank
 from search_r1_minilab.tooling import BACKEND_CHOICES, BackendConfig, build_registry
 from search_r1_minilab.training import (
     add_opsd_teacher_logprobs,
+    add_skill_teacher_logprobs,
     add_reference_logprobs,
     build_custom_forward_datums,
     build_training_datums,
     loss_input_float_lists,
     make_grpo_kl_loss_fn,
     merge_trainer_metrics,
+    opsd_action_kind_lists,
     opsd_logprob_float_lists,
     opsd_mask_float_lists,
     OPSDConfig,
     OPSD_CONTEXT_POLICIES,
+    OPSD_GATE_POLICIES,
     OPSD_MASK_POLICIES,
     OPSD_POSITIVE_POLICIES,
     pack_micro_batches,
@@ -52,6 +57,7 @@ DEFAULT_DATA = ROOT / "tests" / "fixtures" / "smoke_eval.jsonl"
 DEFAULT_BM25_CORPUS = ROOT / "tests" / "fixtures" / "bm25_corpus.jsonl"
 DEFAULT_ENV_FILE = ROOT / ".env"
 DEFAULT_OUTPUT_DIR = ROOT / "outputs" / "train_pytrio"
+DEFAULT_SKILL_BANK = ROOT / "configs" / "opsd_skills.json"
 DEFAULT_SWANLAB_PROJECT = "llm-agent-rl-lab-search-r1"
 
 # 当前稳定训练默认配置：标准化 advantage、ratio clip、reference drift KL 和小学习率。
@@ -113,23 +119,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kl-coef", type=float, default=DEFAULT_KL_COEF)
     parser.add_argument("--policy-ratio-clip", type=float, default=DEFAULT_POLICY_RATIO_CLIP)
     parser.add_argument("--reference-model-path")
-    # OPSD 默认关闭；开启后默认只蒸馏 credited_turns 且要求 positive_advantage。
+    # OPSD 默认关闭；给出非零系数时默认进入 Skill teacher + signed-gap gate。
     parser.add_argument("--opsd-coef", type=float, default=0.0)
     parser.add_argument(
         "--opsd-context-policy",
         choices=sorted(OPSD_CONTEXT_POLICIES),
-        default="same_context",
+        default="skill_context",
     )
     parser.add_argument(
         "--opsd-mask-policy",
         choices=sorted(OPSD_MASK_POLICIES),
-        default="credited_turns",
+        default="assistant_all",
     )
     parser.add_argument(
         "--opsd-positive-policy",
         choices=sorted(OPSD_POSITIVE_POLICIES),
-        default="positive_advantage",
+        default="all",
     )
+    parser.add_argument("--opsd-skill-bank", type=Path, default=DEFAULT_SKILL_BANK)
+    parser.add_argument(
+        "--opsd-gate-policy",
+        choices=sorted(OPSD_GATE_POLICIES),
+        default="sigmoid_gap",
+    )
+    parser.add_argument("--opsd-gate-beta", type=float, default=5.0)
     parser.add_argument("--opsd-min-teacher-logprob", type=float)
     parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
     parser.add_argument("--beta1", type=float, default=0.9)
@@ -204,16 +217,27 @@ def main(args: argparse.Namespace | None = None) -> None:
         mask_policy=args.opsd_mask_policy,
         positive_policy=args.opsd_positive_policy,
         min_teacher_logprob=args.opsd_min_teacher_logprob,
+        gate_policy=args.opsd_gate_policy,
+        gate_beta=args.opsd_gate_beta,
     )
+    skill_bank = (
+        load_skill_bank(args.opsd_skill_bank)
+        if opsd_config.coef > 0.0 and opsd_config.context_policy == "skill_context"
+        else None
+    )
+    args.opsd_skill_bank_hash = skill_bank.digest if skill_bank is not None else None
+    args.opsd_skill_bank_version = skill_bank.version if skill_bank is not None else None
     adam_params = trio.AdamParams(
         learning_rate=args.learning_rate,
         beta1=args.beta1,
         beta2=args.beta2,
     )
     reference_client = None
-    if args.kl_coef > 0.0 or opsd_config.coef > 0.0:
-        # KL 和 OPSD 共用 reference/sampling client：KL 用它做 frozen reference，
-        # OPSD same-context teacher 也用它计算已采样 token 的 teacher logprob。
+    if args.kl_coef > 0.0 or (
+        opsd_config.coef > 0.0 and opsd_config.context_policy == "same_context"
+    ):
+        # Frozen reference supports KL and explicit legacy same-context OPSD.
+        # Skill teacher instead uses the current step's sampling snapshot.
         reference_client = service_client.create_sampling_client(
             base_model=args.base_model,
             model_path=args.reference_model_path,
@@ -222,6 +246,7 @@ def main(args: argparse.Namespace | None = None) -> None:
     run = _init_swanlab(args)
 
     try:
+        _write_run_manifest(args)
         with tqdm(total=args.max_steps, desc="Training", unit="step", position=0) as train_bar:
             for step in range(args.max_steps):
                 step_started = perf_counter()
@@ -273,13 +298,26 @@ def main(args: argparse.Namespace | None = None) -> None:
                 if args.kl_coef > 0.0 and reference_client is not None and datums:
                     train_bar.set_postfix(phase="reference logprobs", refresh=True)
                     datums = add_reference_logprobs(datums, reference_client)
-                if opsd_config.coef > 0.0 and reference_client is not None and datums:
+                if opsd_config.coef > 0.0 and datums:
                     train_bar.set_postfix(phase="OPSD teacher logprobs", refresh=True)
-                    datums = add_opsd_teacher_logprobs(
-                        datums,
-                        reference_client,
-                        min_teacher_logprob=opsd_config.min_teacher_logprob,
-                    )
+                    if opsd_config.context_policy == "skill_context":
+                        if skill_bank is None:
+                            raise ValueError("skill OPSD requires a skill bank")
+                        datums = add_skill_teacher_logprobs(
+                            datums,
+                            sampling_client,
+                            tokenizer,
+                            skill_bank,
+                            min_teacher_logprob=opsd_config.min_teacher_logprob,
+                        )
+                    else:
+                        if reference_client is None:
+                            raise ValueError("legacy OPSD requires a reference client")
+                        datums = add_opsd_teacher_logprobs(
+                            datums,
+                            reference_client,
+                            min_teacher_logprob=opsd_config.min_teacher_logprob,
+                        )
                 micro_batches = pack_micro_batches(datums)
 
                 train_bar.set_postfix(phase="backward", refresh=True)
@@ -322,6 +360,20 @@ def main(args: argparse.Namespace | None = None) -> None:
                                 opsd_mask_list=(
                                     opsd_mask_float_lists(weighted_items)
                                     if opsd_config.coef > 0.0
+                                    else None
+                                ),
+                                opsd_context_policy=opsd_config.context_policy,
+                                opsd_gate_beta=opsd_config.gate_beta,
+                                opsd_total_trajectories=(
+                                    len(datums)
+                                    if opsd_config.coef > 0.0
+                                    and opsd_config.context_policy == "skill_context"
+                                    else None
+                                ),
+                                opsd_action_kind_list=(
+                                    opsd_action_kind_lists(weighted_items)
+                                    if opsd_config.coef > 0.0
+                                    and opsd_config.context_policy == "skill_context"
                                     else None
                                 ),
                             ),
@@ -394,6 +446,36 @@ def serializable_config(args: argparse.Namespace) -> dict[str, Any]:
         key: str(value) if isinstance(value, Path) else value
         for key, value in vars(args).items()
     }
+
+
+def _write_run_manifest(args: argparse.Namespace) -> None:
+    """Persist public-safe method identity without credentials or remote state URI."""
+    output_dir = args.trajectory_output_dir / args.run_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+    data_hash = hashlib.sha256()
+    with args.data.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            data_hash.update(chunk)
+    manifest = {
+        "base_model": args.base_model,
+        "data_file": args.data.name,
+        "data_sha256": data_hash.hexdigest(),
+        "seed": args.seed,
+        "backend": args.backend,
+        "resume_state_provided": bool(args.resume_state),
+        "opsd_context_policy": args.opsd_context_policy,
+        "opsd_gate_policy": args.opsd_gate_policy,
+        "opsd_gate_beta": args.opsd_gate_beta,
+        "opsd_coef": args.opsd_coef,
+        "opsd_mask_policy": args.opsd_mask_policy,
+        "opsd_positive_policy": args.opsd_positive_policy,
+        "skill_bank_version": args.opsd_skill_bank_version,
+        "skill_bank_sha256": args.opsd_skill_bank_hash,
+    }
+    (output_dir / "run_manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _init_swanlab(args: argparse.Namespace) -> Any:

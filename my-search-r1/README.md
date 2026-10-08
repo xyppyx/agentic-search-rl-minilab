@@ -42,6 +42,7 @@
 - `scripts/rollout_smoke_eval.py`：使用 PyTRIO 真实模型采样，默认通过 local BM25 生成 trajectory JSONL 和 Markdown 报告。
 - `scripts/eval_pytrio.py`：base/checkpoint 共用的训练级 rollout 评测入口，输出统一 JSONL 与 Markdown 报告。
 - `scripts/train_pytrio.py`：PyTRIO GRPO 训练入口，默认 local BM25、公开 fixture 和 KL/std-stabilized GRPO，可跑 1-step smoke。
+- `search_r1_minilab/skills.py` 与 `configs/opsd_skills.json`：按数据来源选择固定、无答案的 Teacher-only Skill；训练入口支持同源 Skill teacher 逐轮重评采样动作及 signed-gap OPSD 辅助 loss。
 - `scripts/analyse_trajectories.py`：从已有 trajectory JSONL 生成 Markdown 报告。
 - `scripts/analyse_checkpoints.py`：从 eval JSONL 生成 checkpoint EM/format 对比图，兼容 summary JSONL 和纯 trajectory JSONL。
 - `scripts/analyse_offline_diagnostics.py`：从 eval JSONL 离线标注 alias、答案粒度和 missing follow-up query 风险。
@@ -108,6 +109,21 @@ PYTHONPATH=my-search-r1 uv run python my-search-r1/scripts/train_pytrio.py \
 采样 token 上相对 reference 的漂移；reward 默认仍为 base reward，不启用额外
 behavior penalty。需要复现旧式 GRPO 时显式传入
 `--advantage-normalization center --advantage-clip 0 --kl-coef 0 --policy-ratio-clip 0 --learning-rate 4e-5`。
+
+## Skill 条件 OPSD（待实验验证）
+
+`--opsd-coef` 默认为 0；设为正数后，默认使用 `skill_context`、`assistant_all` 和 `sigmoid_gap`。Student rollout 与 eval 仍使用普通系统提示；当前 step 的 sampling snapshot 只在 teacher 打分时额外读取 `configs/opsd_skills.json`。固定 reference client 只负责原有 KL。Teacher 对相同已采样动作逐轮计算 logprob，辅助项与 GRPO、reference drift 在同一次 backward 中更新。训练日志包含 Skill ID 计数、bank hash、signed gap、gate、动作类别、teacher 调用量/耗时与上下文跳过数。
+
+完成 Skill 离线审计后，可用下列参数进行小预算训练；`--resume-state` 应指向已验证的强 checkpoint，实际路径只写入本地配置：
+
+```bash
+PYTHONPATH=my-search-r1 uv run python my-search-r1/scripts/train_pytrio.py \
+  --max-steps 1 --questions-per-batch 1 --group-size 2 \
+  --backend local_bm25 --swanlab-mode disabled \
+  --opsd-coef 0.01 --opsd-skill-bank my-search-r1/configs/opsd_skills.json
+```
+
+需要复现原门控辅助训练时，显式指定 `--opsd-context-policy same_context --opsd-gate-policy none --opsd-mask-policy credited_turns --opsd-positive-policy positive_advantage`，并沿用原实验的系数、teacher logprob 下限、checkpoint 与数据配置。新 Skill OPSD 尚无训练或评测结果；旧指标不可归因于它。
 
 训练和评测默认使用 `local_bm25`，可通过 `--backend mock_search` 或
 `--backend zhihu_search --env-file my-search-r1/.env` 切换。failure injection

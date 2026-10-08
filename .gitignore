@@ -87,6 +87,7 @@ docs/interview/
 docs/learning/
 docs/info/checkpoints.md
 docs/resume
+docs/interview
 
 # PyBuilder
 .pybuilder/
@@ -240,3 +241,4 @@ __marimo__/
 # Local dataset downloads
 02-opd/datasets/
 02-opd/eval-results/
+.agents/

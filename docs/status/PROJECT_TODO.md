@@ -1,35 +1,27 @@
 # Project TODO
 
-本文件只记录当前活跃任务、下一步验收条件、停止条件和未解决风险。压缩前快照位于 `docs/status/archive/2026-09-16_pre_next_experiments/`，仅供历史追溯。
+本文件只记录当前活跃任务、验收条件、停止条件和未解决风险。切换前快照位于 `docs/status/archive/2026-10-08_pre_skill_opsd/`，仅供历史追溯。
 
-## Active Track: Next-Experiment Prep
+## Active Track: Skill 条件 OPSD 实现与审计
 
-目标：在不改变当前最终路线的前提下，把 Git、文档、评测门槛和后续实验入口整理干净，便于继续做验证补强。
+目标：保留旧 final route 作为已验证 baseline，完成 Skill teacher 的固定 checkpoint 审计，再判断是否启动新方法训练。代码与本地测试结果见 `docs/interview/lesson/2026-10-08_skill_opsd_code_integration.md`。
 
-### 1. Git / 文档卫生
+### 1. 固定 checkpoint 离线审计
 
-- 当前状态：2026-09-16 已开始压缩当前 status，并为压缩前状态建立 archive 快照。
-- 验收条件：`PROJECT_COMPLETED.md` 只保留当前基线、已验证能力和公开边界；`PROJECT_TODO.md` 只保留下一步实验；`PROJECT_LOG.md` 只保留长期决策。
-- 后续动作：复查工作区已有代码 diff，区分用户既有改动、状态压缩改动和后续实验需要提交的改动。
-- 停止条件：发现代码 diff 中含密钥、私有路径、checkpoint、SwanLab 私有链接或大文件路径时，先处理公开边界，不进入实验。
+- 用训练 split 既有轨迹核查 Skill Bank 不含答案、测试题或未来 observation；对同一已采样动作比较普通上下文与 Skill 上下文 logprob。
+- 按桥接搜索、最终属性搜索、过早回答及格式 token 统计 signed gap、gate、teacher 调用量和耗时，并人工复核 gained/lost case。
+- 停止条件：真实 Qwen chat template 下 token 对齐失败、Skill 主要抬高错误动作、gap 近零且无有用区分，或额外 teacher 成本不可接受。未通过不启动新训练。
 
-### 2. Final Route Validation
+### 2. 训练与评测门槛
 
-- 目标：补强 `guardfix20-resume-opsd-v2-5step-20260811` 的可信度，而不是继续盲目加训练步数。
-- 优先级：
-  1. 跑 final route 的 `alias80`，检查答案别名、粒度和非 ASCII 风险。
-  2. 做 second seed 或 non-overlap offset 小规模复现实验，验证不是 40 个 question slot 的偶然收益。
-  3. 对 bridge_eval_350 做 gained/lost case review，确认收益来自 bridge/final-hop 搜索和停止策略，而不是只靠 format 收束。
-  4. 若资源允许，补 bridge500 / MuSiQue source-level 分析，明确复杂多跳短板。
-- 验收指标：EM/correct、format、avg search、tool success rate、missing follow-up、bad max-search loop、alias/granularity diagnostics。
-- 停止条件：tool success rate < 1.0、format 明显下降、平均搜索失控、missing follow-up 增加，或 OPSD mask/token 占比异常。
+- 审计通过后，从同一 guard-fix checkpoint、同 seed/数据/backend/预算对照 GRPO、显式旧 same-context 门控辅助和 Skill OPSD；先做 local BM25 小步 smoke，再进入真实 backend。
+- 每组记录 loss/reward、EM/correct、format、avg search、tool success、missing follow-up、重复 query、bad max-search loop、Skill/gap/gate 分布、token/时间/费用。
+- dev70 只做 health gate；至少一个 clean targeted eval 后再谈收益。工具成功率不足、格式下降、搜索次数失控、gate 饱和或对齐失败时停止扩大训练。新方法指标不能沿用旧门控结果。
 
-### 3. Training Scale Gate
+### 3. 旧路线验证补强
 
-- 当前决策：不优先扩大训练步数；先做验证、case review 和更可靠 teacher/replay 设计。
-- 允许重启扩大训练的条件：final route 在 alias80/second-seed/case review 中没有明显副作用，且有明确问题指向“训练覆盖不足”而非 reward/teacher 设计问题。
-- 推荐扩展方式：小步试验 30/50 step、不同 seed、不同 offset 或 replay/teacher 过滤；每次必须有 dev70 health gate 和至少一个 targeted eval。
-- 不推荐：直接把 OPSD resume 从 5 step 盲目拉长到 20+ step，或把 success rate < 1.0 的结果包装成正式提升。
+- `guardfix20-resume-opsd-v2-5step-20260811` 仍缺 alias80、第二 seed/非重叠采样和 bridge350 gained/lost case review；有资源时补 MuSiQue/bridge500 边界分析。
+- 小预算训练覆盖不足，暂不盲目增加到 20+ step；扩量前先判断问题来自训练覆盖、reward 还是 teacher 设计。
 
 ## Parked Tracks
 
@@ -44,4 +36,5 @@
 - 小预算 RL 方差较大；当前训练覆盖远小于 `train.jsonl`，不能包装成充分训练。
 - `bridge_eval_350` 是 test-only targeted subset，但不是完整无偏 test；去除 MuSiQue 的边界必须继续说明。
 - alias/granularity 对最终路线尚未验证；如果面试或展示中提泛化收益，需要先补证据。
+- `docs/interview/future/baoyan-resume-template/main.tex` 的 Skill 条件 OPSD 仅完成代码接入；结果数字仍是原门控辅助训练的占位数据。对外使用前须在新方法训练评测后替换，或继续明确旧路线归因。
 - 当前工作区已有多处代码改动；提交前必须复查 `git diff --cached`、敏感信息和大文件边界。

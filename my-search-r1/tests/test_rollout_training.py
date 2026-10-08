@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import unittest
+import json
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from search_r1_minilab.data import SearchExample
@@ -18,10 +21,13 @@ from search_r1_minilab.rollout import (
     trajectory_to_record,
 )
 from search_r1_minilab.rewards import RewardShapingConfig
+from search_r1_minilab.protocol import build_next_prompt, build_prompt, initial_messages, tool_message
+from search_r1_minilab.skills import load_skill_bank
 from search_r1_minilab.tooling import BackendConfig, build_registry
 from search_r1_minilab.tools import LocalBM25Backend, ToolRegistry
 from search_r1_minilab.training import (
     add_opsd_teacher_logprobs,
+    add_skill_teacher_logprobs,
     add_reference_logprobs,
     build_custom_forward_datums,
     build_datum,
@@ -31,6 +37,8 @@ from search_r1_minilab.training import (
     datum_loss_token_count,
     evaluation_metrics,
     make_grpo_kl_loss_fn,
+    merge_trainer_metrics,
+    opsd_action_kind_lists,
     opsd_logprob_float_lists,
     opsd_mask_float_lists,
     pack_micro_batches,
@@ -183,6 +191,20 @@ class TrainingRolloutTest(unittest.TestCase):
         self.assertEqual(datum.num_tokens, 5)
         self.assertEqual(advantages, [0.0, 2.0, 2.0, 0.0, 2.0])
         self.assertEqual(datum_loss_token_count(datum), 3)
+
+    def test_skill_opsd_keeps_zero_advantage_trajectory(self) -> None:
+        trajectory = Trajectory(
+            example=SearchExample("q-zero", "Question?", ["A"], "test"),
+            group_index=0,
+            messages=[],
+            advantage=0.0,
+            turns=[AssistantTurn([1, 2], [3], [-0.2], "Answer: A")],
+        )
+        self.assertEqual(build_training_datums([trajectory]), [])
+        datums = build_training_datums([trajectory], opsd_mask_policy="assistant_all")
+        self.assertEqual(len(datums), 1)
+        self.assertEqual(datum_loss_token_count(datums[0]), 0)
+        self.assertEqual(sum(datums[0].opsd_mask), 1.0)
 
     def test_turn_credit_none_preserves_trajectory_advantage(self) -> None:
         trajectory = _turn_credit_candidate(advantage=-0.5)
@@ -764,6 +786,73 @@ class TrainingRolloutTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "model logprob length"):
             compute_opsd_teacher_logprobs(datum, BadLengthReferenceClient())
 
+    def test_skill_teacher_replays_same_two_actions_without_future_observation(self) -> None:
+        tokenizer = FakeTokenizer()
+        history = initial_messages("Who wrote the bridge work?")
+        first_text = "<tool_call><function=search><parameter=query>bridge work</parameter></function></tool_call>"
+        first_tokens = tokenizer.encode(first_text)
+        first_prompt = build_prompt(tokenizer, history)
+        observation = tool_message("search-0", "Bridge work was written by A.")
+        second_prompt = build_next_prompt(
+            tokenizer, history, first_text, first_prompt, first_tokens, observation
+        )
+        second_text = "Answer: A"
+        second_tokens = tokenizer.encode(second_text)
+        trajectory = Trajectory(
+            example=SearchExample("q-skill", "Who wrote the bridge work?", ["A"], "hotpotqa"),
+            group_index=0,
+            messages=[*history, {"role": "assistant", "content": first_text}, observation,
+                      {"role": "assistant", "content": second_text}],
+            advantage=1.0,
+            events=[{"role": "assistant", "parsed_kind": "tool"},
+                    {"role": "tool"}, {"role": "assistant", "parsed_kind": "answer"}],
+            turns=[
+                AssistantTurn(first_prompt, first_tokens, [-0.1] * len(first_tokens), first_text),
+                AssistantTurn(second_prompt, second_tokens, [-0.2] * len(second_tokens), second_text),
+            ],
+        )
+        item = build_datum(trajectory, opsd_mask_policy="assistant_all")
+        teacher = FakeReferenceClient()
+        bank = load_skill_bank(Path(__file__).resolve().parents[1] / "configs" / "opsd_skills.json")
+        self.assertEqual(bank.select("nq").skill_id, "direct_evidence_v1")
+
+        result = add_skill_teacher_logprobs([item], teacher, tokenizer, bank)[0]
+
+        self.assertEqual(result.skill_id, "bridge_evidence_v1")
+        self.assertEqual(result.teacher_calls, 2)
+        self.assertEqual(teacher.requests[0][-len(first_tokens):], first_tokens)
+        self.assertEqual(teacher.requests[1][-len(second_tokens):], second_tokens)
+        self.assertIn("Teacher-only search skill", tokenizer.decode(teacher.requests[0]))
+        self.assertNotIn("Bridge work was written by A.", tokenizer.decode(teacher.requests[0]))
+        self.assertIn("Bridge work was written by A.", tokenizer.decode(teacher.requests[1]))
+        self.assertNotIn("Teacher-only search skill", trajectory.messages[0]["content"])
+        self.assertEqual(sum(result.opsd_mask), len(first_tokens) + len(second_tokens))
+        self.assertEqual(result.opsd_mask[len(first_prompt) + len(first_tokens) - 1], 0.0)
+        kinds = opsd_action_kind_lists([result])[0]
+        self.assertEqual(kinds[len(first_prompt) - 1], 1)
+        self.assertEqual(kinds[len(second_prompt) - 1], 2)
+
+    def test_skill_teacher_context_limit_skips_auxiliary_only(self) -> None:
+        tokenizer = FakeTokenizer()
+        history = initial_messages("Question?")
+        prompt = build_prompt(tokenizer, history)
+        text = "Answer: A"
+        tokens = tokenizer.encode(text)
+        trajectory = Trajectory(
+            example=SearchExample("q-limit", "Question?", ["A"], "nq"),
+            group_index=0,
+            messages=[*history, {"role": "assistant", "content": text}],
+            advantage=1.0,
+            turns=[AssistantTurn(prompt, tokens, [-0.1] * len(tokens), text)],
+        )
+        item = build_datum(trajectory, opsd_mask_policy="assistant_all")
+        bank = load_skill_bank(Path(__file__).resolve().parents[1] / "configs" / "opsd_skills.json")
+        with patch("search_r1_minilab.training.MAX_TRAIN_CONTEXT_TOKENS", 30):
+            result = add_skill_teacher_logprobs([item], FakeReferenceClient(), tokenizer, bank)[0]
+        self.assertEqual(result.opsd_skip_reason, "teacher_context_limit")
+        self.assertEqual(sum(result.opsd_mask), 0.0)
+        self.assertGreater(datum_loss_token_count(result), 0)
+
     def test_opsd_loss_coef_zero_preserves_grpo_kl_metrics(self) -> None:
         import torch
 
@@ -801,6 +890,78 @@ class TrainingRolloutTest(unittest.TestCase):
         self.assertAlmostEqual(metrics["opsd/teacher_logprob_mean"], -0.5, places=6)
         self.assertAlmostEqual(metrics["opsd/student_teacher_gap_mean"], 0.3, places=6)
 
+    def test_skill_opsd_gap_gate_and_microbatch_gradient_are_partition_invariant(self) -> None:
+        import torch
+
+        common = dict(kl_coef=0.0, opsd_coef=0.5, opsd_context_policy="skill_context",
+                      opsd_gate_beta=5.0, opsd_total_trajectories=2)
+        old = [[0.0, 0.0], [0.0, 0.0]]
+        advantages = [[0.0, 0.0], [0.0, 0.0]]
+        teacher = [[-0.1, -0.4], [-0.2, -0.3]]
+        masks = [[1.0, 1.0], [1.0, 0.0]]
+        full_values = [torch.tensor([-0.4, -0.2], requires_grad=True),
+                       torch.tensor([-0.5, -0.1], requires_grad=True)]
+        full_fn = make_grpo_kl_loss_fn(old, advantages, opsd_logprobs_list=teacher,
+                                       opsd_mask_list=masks,
+                                       opsd_action_kind_list=[[1, 2], [1, 0]], **common)
+        full_loss, metrics = full_fn([object(), object()], full_values)
+        full_loss.backward()
+        split_values = [value.detach().clone().requires_grad_() for value in full_values]
+        split_losses = []
+        for index in range(2):
+            fn = make_grpo_kl_loss_fn([old[index]], [advantages[index]],
+                                      opsd_logprobs_list=[teacher[index]],
+                                      opsd_mask_list=[masks[index]], **common)
+            loss, _ = fn([object()], [split_values[index]])
+            split_losses.append(loss)
+        sum(split_losses).backward()
+        self.assertAlmostEqual(full_loss.item(), sum(loss.item() for loss in split_losses), places=6)
+        for full, split in zip(full_values, split_values):
+            self.assertTrue(torch.allclose(full.grad, split.grad))
+        self.assertGreater(metrics["opsd/gate_mean"], 0.5)
+        self.assertEqual(metrics["opsd/selected_trajectories"], 2.0)
+        self.assertEqual(metrics["opsd/search/selected_tokens"], 2.0)
+        self.assertEqual(metrics["opsd/answer/selected_tokens"], 1.0)
+
+    def test_skill_opsd_adds_to_grpo_and_reference_drift_in_one_loss(self) -> None:
+        import torch
+
+        current = torch.tensor([-0.2], requires_grad=True)
+        loss_fn = make_grpo_kl_loss_fn(
+            sampling_logprobs_list=[[0.0]],
+            advantages_list=[[1.0]],
+            reference_logprobs_list=[[-0.3]],
+            kl_coef=0.1,
+            opsd_coef=0.5,
+            opsd_logprobs_list=[[-0.1]],
+            opsd_mask_list=[[1.0]],
+            opsd_context_policy="skill_context",
+            opsd_total_trajectories=1,
+        )
+        loss, metrics = loss_fn([object()], [current])
+        gate = torch.sigmoid(torch.tensor(0.5)).item()
+        expected = -torch.exp(torch.tensor(-0.2)).item() + 0.0005 + 0.5 * gate * 0.1
+        self.assertAlmostEqual(loss.item(), expected, places=6)
+        self.assertEqual(metrics["grpo_kl/train_tokens"], 1.0)
+        self.assertEqual(metrics["opsd/masked_tokens"], 1.0)
+        loss.backward()
+        self.assertIsNotNone(current.grad)
+
+    def test_opsd_trainer_metrics_weight_gap_by_selected_tokens(self) -> None:
+        merged = merge_trainer_metrics([
+            SimpleNamespace(metrics={"opsd/masked_tokens": 1.0,
+                                     "opsd/total_tokens": 2.0,
+                                     "opsd/gate_mean": 0.25,
+                                     "opsd/mask_rate": 0.5}),
+            SimpleNamespace(metrics={"opsd/masked_tokens": 3.0,
+                                     "opsd/total_tokens": 6.0,
+                                     "opsd/gate_mean": 0.75,
+                                     "opsd/mask_rate": 0.5}),
+        ])
+        self.assertEqual(merged["trainer/opsd/masked_tokens"], 4.0)
+        self.assertAlmostEqual(merged["trainer/opsd/gate_mean"], 0.625)
+        self.assertAlmostEqual(merged["trainer/opsd/mask_rate"], 0.5)
+
     def test_opsd_helpers_require_present_metadata(self) -> None:
         trajectory = Trajectory(
             example=SearchExample("q-opsd-meta", "Question?", ["A"], "test"),
@@ -836,9 +997,10 @@ class TrainingRolloutTest(unittest.TestCase):
         with patch("sys.argv", ["train_pytrio.py", "--max-steps", "1"]):
             defaults = train_pytrio.parse_args()
         self.assertEqual(defaults.opsd_coef, 0.0)
-        self.assertEqual(defaults.opsd_context_policy, "same_context")
-        self.assertEqual(defaults.opsd_mask_policy, "credited_turns")
-        self.assertEqual(defaults.opsd_positive_policy, "positive_advantage")
+        self.assertEqual(defaults.opsd_context_policy, "skill_context")
+        self.assertEqual(defaults.opsd_mask_policy, "assistant_all")
+        self.assertEqual(defaults.opsd_positive_policy, "all")
+        self.assertEqual(defaults.opsd_gate_policy, "sigmoid_gap")
         self.assertIsNone(defaults.opsd_min_teacher_logprob)
 
         with patch(
@@ -849,6 +1011,10 @@ class TrainingRolloutTest(unittest.TestCase):
                 "1",
                 "--opsd-coef",
                 "0.05",
+                "--opsd-context-policy",
+                "same_context",
+                "--opsd-gate-policy",
+                "none",
                 "--opsd-mask-policy",
                 "final_answer",
                 "--opsd-positive-policy",
@@ -859,9 +1025,28 @@ class TrainingRolloutTest(unittest.TestCase):
         ):
             overrides = train_pytrio.parse_args()
         self.assertEqual(overrides.opsd_coef, 0.05)
+        self.assertEqual(overrides.opsd_context_policy, "same_context")
         self.assertEqual(overrides.opsd_mask_policy, "final_answer")
         self.assertEqual(overrides.opsd_positive_policy, "exact_match")
         self.assertEqual(overrides.opsd_min_teacher_logprob, -4.0)
+
+    def test_train_manifest_records_skill_identity_without_remote_state(self) -> None:
+        from scripts import train_pytrio
+
+        with patch("sys.argv", ["train_pytrio.py", "--max-steps", "1"]):
+            args = train_pytrio.parse_args()
+        args.resume_state = "private-remote-state-uri"
+        args.opsd_skill_bank_hash = "test-sha256"
+        args.opsd_skill_bank_version = "test-v1"
+        with TemporaryDirectory() as temporary:
+            args.trajectory_output_dir = Path(temporary)
+            train_pytrio._write_run_manifest(args)
+            written = (Path(temporary) / args.run_name / "run_manifest.json").read_text()
+        manifest = json.loads(written)
+        self.assertEqual(manifest["skill_bank_sha256"], "test-sha256")
+        self.assertEqual(len(manifest["data_sha256"]), 64)
+        self.assertTrue(manifest["resume_state_provided"])
+        self.assertNotIn("private-remote-state-uri", written)
 
 
     def test_failure_wrapper_preserves_dispatch_backend_name(self) -> None:

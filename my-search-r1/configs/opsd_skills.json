@@ -1,0 +1,20 @@
+{
+  "version": "2026-10-08-v1",
+  "default_skill_id": "bridge_evidence_v1",
+  "by_source": {
+    "hotpotqa": "bridge_evidence_v1",
+    "2wikimultihopqa": "bridge_evidence_v1",
+    "bamboogle": "bridge_evidence_v1",
+    "nq": "direct_evidence_v1"
+  },
+  "skills": [
+    {
+      "id": "bridge_evidence_v1",
+      "teacher_context": "Check which relation the retrieved text actually supports. An entity mentioned in a result is only a bridge candidate until the question's bridge relation is supported. If the bridge is supported but the requested final attribute is missing, search the bridge entity together with that missing relation. Change repeated or empty queries by adding the missing relation or an unambiguous entity name. Answer only after both relations have evidence, subject to the existing search budget."
+    },
+    {
+      "id": "direct_evidence_v1",
+      "teacher_context": "Check whether the observed result directly supports the requested answer attribute. If evidence is missing, revise the query using the entity and missing relation; do not repeat the same query or answer from memory. When evidence is sufficient, give the shortest supported answer, subject to the existing search budget."
+    }
+  ]
+}

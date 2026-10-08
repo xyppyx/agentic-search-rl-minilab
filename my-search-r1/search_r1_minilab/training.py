@@ -2,21 +2,24 @@
 
 本文件承接 rollout 产出的 Trajectory，并完成训练前的关键转换：turn-level
 credit、token-level datum 构造、micro-batch 装箱、reference/teacher logprob
-对齐，以及 GRPO + KL + gated OPSD 的 custom loss。
+对齐，以及 GRPO + KL + Skill OPSD 的 custom loss；旧门控目标显式保留。
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from time import perf_counter
 from typing import Any, Callable
 
 import numpy as np
 import pytrio as trio
 
 from search_r1_minilab.diagnostics import behavior_metrics, diagnose_fields
+from search_r1_minilab.protocol import build_next_prompt, build_prompt, teacher_messages_with_skill
 from search_r1_minilab.rollout import Trajectory
 from search_r1_minilab.rewards import extract_answer
+from search_r1_minilab.skills import SkillBank
 from search_r1_minilab.turn_credit import (
     detect_early_answer_risk,
     detect_final_answer_guard_risk,
@@ -41,13 +44,14 @@ TURN_CREDIT_POLICIES = {
     "evidence_bridge",
     "final_hop_bridge",
 }
-# 当前 OPSD 只支持 same_context teacher：teacher 在同一条 rollout 上给已采样 token
-# 计算 logprob，不构造 gold-answer 或改写上下文。
-OPSD_CONTEXT_POLICIES = {"same_context"}
+# same_context 仅用于复现旧门控自模仿；新训练默认使用 skill_context。
+OPSD_CONTEXT_POLICIES = {"same_context", "skill_context"}
+OPSD_GATE_POLICIES = {"none", "sigmoid_gap"}
 
 # mask policy 决定哪些 assistant turn 可以被 OPSD 蒸馏。
 OPSD_MASK_POLICIES = {
     "none",
+    "assistant_all",
     "final_answer",
     "credited_turns",
     "final_and_credited",
@@ -99,23 +103,32 @@ class TurnCreditConfig:
 
 @dataclass(frozen=True)
 class OPSDConfig:
-    """gated on-policy self-distillation 辅助目标配置。"""
+    """OPSD 辅助目标配置；旧 same-context 路径需要显式指定。"""
 
     coef: float = 0.0
-    context_policy: str = "same_context"
-    mask_policy: str = "credited_turns"
-    positive_policy: str = "positive_advantage"
+    context_policy: str = "skill_context"
+    mask_policy: str = "assistant_all"
+    positive_policy: str = "all"
     min_teacher_logprob: float | None = None
+    gate_policy: str = "sigmoid_gap"
+    gate_beta: float = 5.0
 
     def __post_init__(self) -> None:
         if self.coef < 0.0:
             raise ValueError("OPSD coef must be non-negative")
         if self.context_policy not in OPSD_CONTEXT_POLICIES:
-            raise ValueError("OPSD context policy must be 'same_context'")
+            raise ValueError("unsupported OPSD context policy")
+        if self.gate_policy not in OPSD_GATE_POLICIES:
+            raise ValueError("unsupported OPSD gate policy")
+        if self.gate_beta <= 0.0:
+            raise ValueError("OPSD gate beta must be positive")
+        if self.coef > 0.0 and self.context_policy == "skill_context" and self.gate_policy != "sigmoid_gap":
+            raise ValueError("skill_context requires sigmoid_gap gate")
+        if self.coef > 0.0 and self.context_policy == "same_context" and self.gate_policy != "none":
+            raise ValueError("same_context requires the legacy none gate")
         if self.mask_policy not in OPSD_MASK_POLICIES:
             raise ValueError(
-                "OPSD mask policy must be 'none', 'final_answer', "
-                "'credited_turns', or 'final_and_credited'"
+                "unsupported OPSD mask policy"
             )
         if self.positive_policy not in OPSD_POSITIVE_POLICIES:
             raise ValueError(
@@ -139,12 +152,22 @@ class TrainingDatum:
         reference_logprobs: list[float] | None = None,
         opsd_logprobs: list[float] | None = None,
         opsd_mask: list[float] | None = None,
+        trajectory: Trajectory | None = None,
+        skill_id: str | None = None,
+        teacher_calls: int = 0,
+        teacher_seconds: float = 0.0,
+        opsd_skip_reason: str | None = None,
     ) -> None:
         self.datum = datum
         self.num_tokens = num_tokens
         self.reference_logprobs = reference_logprobs
         self.opsd_logprobs = opsd_logprobs
         self.opsd_mask = opsd_mask
+        self.trajectory = trajectory
+        self.skill_id = skill_id
+        self.teacher_calls = teacher_calls
+        self.teacher_seconds = teacher_seconds
+        self.opsd_skip_reason = opsd_skip_reason
 
 
 def build_datum(
@@ -156,8 +179,7 @@ def build_datum(
     """把一条 rollout trajectory 转成 PyTRIO training datum。"""
     if opsd_mask_policy not in OPSD_MASK_POLICIES:
         raise ValueError(
-            "OPSD mask policy must be 'none', 'final_answer', "
-            "'credited_turns', or 'final_and_credited'"
+            "unsupported OPSD mask policy"
         )
     if opsd_positive_policy not in OPSD_POSITIVE_POLICIES:
         raise ValueError(
@@ -254,7 +276,7 @@ def build_datum(
             "advantages": np.asarray(advantages, dtype=np.float32),
         },
     )
-    return TrainingDatum(datum, len(input_tokens), opsd_mask=opsd_mask)
+    return TrainingDatum(datum, len(input_tokens), opsd_mask=opsd_mask, trajectory=trajectory)
 
 
 def build_training_datums(
@@ -274,7 +296,9 @@ def build_training_datums(
                 opsd_mask_policy=opsd_mask_policy,
                 opsd_positive_policy=opsd_positive_policy,
             )
-            if datum_loss_token_count(datum) > 0:
+            # Skill OPSD may still learn from a degenerate GRPO group whose
+            # advantage is zero; keep it when the auxiliary mask has tokens.
+            if datum_loss_token_count(datum) > 0 or any(datum.opsd_mask or []):
                 datums.append(datum)
     return datums
 
@@ -588,6 +612,10 @@ def _opsd_turn_selected(
     """判断当前 turn 是否进入 OPSD token mask。"""
     if policy == "none":
         return False
+    if policy == "assistant_all":
+        return _opsd_positive_gate(
+            trajectory, positive_policy, turn_advantage=turn_advantage
+        )
     turn = trajectory.turns[turn_index]
     credited = bool(turn.credit_label)
     final_answer = _is_final_answer_turn(trajectory.events, turn_index)
@@ -713,6 +741,11 @@ def weight_micro_batch_items_for_global_mean(
                 reference_logprobs=item.reference_logprobs,
                 opsd_logprobs=item.opsd_logprobs,
                 opsd_mask=item.opsd_mask,
+                trajectory=item.trajectory,
+                skill_id=item.skill_id,
+                teacher_calls=item.teacher_calls,
+                teacher_seconds=item.teacher_seconds,
+                opsd_skip_reason=item.opsd_skip_reason,
             )
         )
     return weighted_items
@@ -730,6 +763,11 @@ def add_reference_logprobs(
             reference_logprobs=compute_reference_logprobs(item, reference_client),
             opsd_logprobs=item.opsd_logprobs,
             opsd_mask=item.opsd_mask,
+            trajectory=item.trajectory,
+            skill_id=item.skill_id,
+            teacher_calls=item.teacher_calls,
+            teacher_seconds=item.teacher_seconds,
+            opsd_skip_reason=item.opsd_skip_reason,
         )
         for item in datums
     ]
@@ -775,6 +813,111 @@ def add_opsd_teacher_logprobs(
                 reference_logprobs=item.reference_logprobs,
                 opsd_logprobs=opsd_logprobs,
                 opsd_mask=opsd_mask,
+                trajectory=item.trajectory,
+                skill_id=item.skill_id,
+            )
+        )
+    return updated
+
+
+def add_skill_teacher_logprobs(
+    datums: list[TrainingDatum],
+    teacher_client: Any,
+    tokenizer: Any,
+    skill_bank: SkillBank,
+    *,
+    min_teacher_logprob: float | None = None,
+) -> list[TrainingDatum]:
+    """Score the same sampled assistant tokens with a current-policy Skill teacher."""
+    updated: list[TrainingDatum] = []
+    for item in datums:
+        trajectory = item.trajectory
+        if trajectory is None:
+            raise ValueError("skill OPSD datum is missing its trajectory")
+        skill = skill_bank.select(trajectory.example.data_source)
+        mask = list(_require_opsd_mask(item))
+        scores = [0.0] * len(mask)
+        teacher_history = teacher_messages_with_skill(
+            trajectory.messages[:2], skill.teacher_context
+        )
+        teacher_prompt = build_prompt(tokenizer, teacher_history)
+        message_index = 2
+        previous_full: list[int] = []
+        calls = 0
+        started = perf_counter()
+        skip_reason: str | None = None
+
+        for turn_index, turn in enumerate(trajectory.turns):
+            if turn_index > 0 and turn.prompt_tokens[: len(previous_full)] != previous_full:
+                raise ValueError("student turn prompt is not a trajectory prefix")
+            if len(turn.completion_tokens) != len(turn.logprobs):
+                raise ValueError("assistant completion/logprob lengths differ")
+            start = len(turn.prompt_tokens) - 1
+            end = start + len(turn.completion_tokens)
+            if end > len(mask) or start < 0:
+                raise ValueError("teacher completion does not align with datum targets")
+            if message_index >= len(trajectory.messages):
+                raise ValueError("missing assistant message for sampled turn")
+            if trajectory.messages[message_index].get("role") != "assistant" or trajectory.messages[message_index].get("content") != turn.text:
+                raise ValueError("assistant message differs from sampled turn")
+
+            if any(mask[start:end]):
+                full_teacher_tokens = [*teacher_prompt, *turn.completion_tokens]
+                if len(full_teacher_tokens) > MAX_TRAIN_CONTEXT_TOKENS:
+                    skip_reason = "teacher_context_limit"
+                    mask = [0.0] * len(mask)
+                    scores = [0.0] * len(scores)
+                    break
+                response = teacher_client.compute_logprobs(
+                    trio.ModelInput.from_ints(full_teacher_tokens)
+                ).result()
+                calls += 1
+                if len(response) != len(full_teacher_tokens):
+                    raise ValueError("skill teacher logprob length mismatch")
+                for offset, value in enumerate(response[-len(turn.completion_tokens):]):
+                    position = start + offset
+                    if value is None:
+                        if mask[position]:
+                            raise ValueError("missing skill teacher logprob for masked token")
+                        continue
+                    scores[position] = float(value)
+                    if min_teacher_logprob is not None and scores[position] < min_teacher_logprob:
+                        mask[position] = 0.0
+
+            next_turn_exists = turn_index + 1 < len(trajectory.turns)
+            if next_turn_exists:
+                if message_index + 1 >= len(trajectory.messages):
+                    raise ValueError("missing tool observation before next assistant turn")
+                tool = trajectory.messages[message_index + 1]
+                if tool.get("role") != "tool":
+                    raise ValueError("non-tool observation before next assistant turn")
+                teacher_prompt = build_next_prompt(
+                    tokenizer,
+                    teacher_history,
+                    turn.text,
+                    teacher_prompt,
+                    turn.completion_tokens,
+                    tool,
+                )
+                teacher_history.extend((trajectory.messages[message_index], tool))
+                message_index += 2
+            else:
+                message_index += 1
+            previous_full = [*turn.prompt_tokens, *turn.completion_tokens]
+        if skip_reason is None and message_index != len(trajectory.messages):
+            raise ValueError("teacher replay did not consume the full trajectory")
+        updated.append(
+            TrainingDatum(
+                item.datum,
+                item.num_tokens,
+                reference_logprobs=item.reference_logprobs,
+                opsd_logprobs=scores,
+                opsd_mask=mask,
+                trajectory=trajectory,
+                skill_id=skill.skill_id,
+                teacher_calls=calls,
+                teacher_seconds=perf_counter() - started,
+                opsd_skip_reason=skip_reason,
             )
         )
     return updated
@@ -868,8 +1011,12 @@ def make_grpo_kl_loss_fn(
     opsd_coef: float = 0.0,
     opsd_logprobs_list: list[list[float]] | None = None,
     opsd_mask_list: list[list[float]] | None = None,
+    opsd_context_policy: str = "same_context",
+    opsd_gate_beta: float = 5.0,
+    opsd_total_trajectories: int | None = None,
+    opsd_action_kind_list: list[list[int]] | None = None,
 ) -> Callable[[list[trio.Datum], list[Any]], tuple[Any, dict[str, float]]]:
-    """创建 GRPO + reference drift KL + gated OPSD 的 custom loss。"""
+    """Create GRPO + reference drift + explicit legacy or Skill OPSD loss."""
     if kl_coef < 0.0:
         raise ValueError("kl_coef must be non-negative")
     if policy_ratio_clip < 0.0:
@@ -882,6 +1029,14 @@ def make_grpo_kl_loss_fn(
         opsd_logprobs_list is None or opsd_mask_list is None
     ):
         raise ValueError("OPSD training requires teacher logprobs and mask")
+    if opsd_context_policy not in OPSD_CONTEXT_POLICIES:
+        raise ValueError("unsupported OPSD context policy")
+    if opsd_gate_beta <= 0.0:
+        raise ValueError("OPSD gate beta must be positive")
+    if opsd_coef > 0.0 and opsd_context_policy == "skill_context" and (
+        opsd_total_trajectories is None or opsd_total_trajectories <= 0
+    ):
+        raise ValueError("skill OPSD requires a positive global trajectory count")
 
     def loss_fn(
         data: list[trio.Datum],
@@ -903,6 +1058,8 @@ def make_grpo_kl_loss_fn(
             raise ValueError("OPSD teacher batch length mismatch")
         if opsd_mask_list is not None and len(opsd_mask_list) != batch_len:
             raise ValueError("OPSD mask batch length mismatch")
+        if opsd_action_kind_list is not None and len(opsd_action_kind_list) != batch_len:
+            raise ValueError("OPSD action-kind batch length mismatch")
 
         losses = []
         ratio_chunks = []
@@ -911,6 +1068,11 @@ def make_grpo_kl_loss_fn(
         opsd_current_chunks = []
         opsd_teacher_chunks = []
         opsd_gap_chunks = []
+        opsd_signed_gap_chunks = []
+        opsd_gate_chunks = []
+        action_gate_chunks: dict[int, list[Any]] = defaultdict(list)
+        action_gap_chunks: dict[int, list[Any]] = defaultdict(list)
+        skill_opsd_terms = []
         train_tokens = 0
         opsd_masked_tokens = 0
         denominator = 0
@@ -998,15 +1160,40 @@ def make_grpo_kl_loss_fn(
                     opsd_teacher_chunks.append(selected_teacher.detach())
                     opsd_gap_chunks.append((selected_current - selected_teacher).abs().detach())
                     opsd_masked_tokens += int(selected.sum().item())
+                    if opsd_context_policy == "skill_context":
+                        signed_gap = (selected_teacher.detach() - selected_current.detach())
+                        gate = torch.sigmoid(opsd_gate_beta * signed_gap).detach()
+                        skill_opsd_terms.append(
+                            (gate * (selected_teacher.detach() - selected_current)).mean()
+                        )
+                        opsd_signed_gap_chunks.append(signed_gap)
+                        opsd_gate_chunks.append(gate)
+                        if opsd_action_kind_list is not None:
+                            kind_values = torch.as_tensor(
+                                opsd_action_kind_list[item_index], dtype=torch.int64, device=device
+                            )
+                            if len(kind_values) != len(current):
+                                raise ValueError("OPSD action kinds must match current length")
+                            selected_kinds = kind_values[selected]
+                            for kind in (1, 2, 3):
+                                kind_mask = selected_kinds == kind
+                                if torch.any(kind_mask):
+                                    action_gate_chunks[kind].append(gate[kind_mask])
+                                    action_gap_chunks[kind].append(signed_gap[kind_mask])
 
         grpo_loss = torch.stack(losses).sum()
         loss = grpo_loss
         opsd_loss_value = 0.0
         if opsd_coef > 0.0 and opsd_current_chunks:
-            opsd_current = torch.cat(opsd_current_chunks)
-            # same-context OPSD 当前实现等价于在 gated token 上提升当前策略 logprob；
-            # teacher logprob 主要用于对齐检查、mask 收窄和指标观测。
-            opsd_loss = -opsd_current.mean()
+            if opsd_context_policy == "skill_context":
+                # Every trajectory uses its own selected-token mean, then a fixed
+                # whole-step denominator. Partitioning into micro-batches cannot
+                # change the auxiliary gradient scale.
+                opsd_loss = torch.stack(skill_opsd_terms).sum() / opsd_total_trajectories
+            else:
+                # Explicit legacy reproduction: teacher only filters a positive
+                # imitation loss and does not set its gradient weight.
+                opsd_loss = -torch.cat(opsd_current_chunks).mean()
             loss = loss + opsd_coef * opsd_loss
             opsd_loss_value = float(opsd_loss.detach().item())
         metrics = {
@@ -1026,7 +1213,9 @@ def make_grpo_kl_loss_fn(
                         if denominator > 0
                         else 0.0
                     ),
+                    "opsd/total_tokens": float(denominator),
                     "opsd/loss_mean": opsd_loss_value,
+                    "opsd/skill_mode": float(opsd_context_policy == "skill_context"),
                 }
             )
         if ratio_chunks:
@@ -1046,6 +1235,22 @@ def make_grpo_kl_loss_fn(
                 teacher_logprobs.mean().item()
             )
             metrics["opsd/student_teacher_gap_mean"] = float(gaps.mean().item())
+        if opsd_gate_chunks:
+            gates = torch.cat(opsd_gate_chunks)
+            signed_gaps = torch.cat(opsd_signed_gap_chunks)
+            metrics["opsd/gate_mean"] = float(gates.mean().item())
+            metrics["opsd/signed_gap_mean"] = float(signed_gaps.mean().item())
+            metrics["opsd/positive_gap_fraction"] = float(
+                (signed_gaps > 0).float().mean().item()
+            )
+            metrics["opsd/selected_trajectories"] = float(len(skill_opsd_terms))
+            for kind, label in ((1, "search"), (2, "answer"), (3, "invalid")):
+                if action_gate_chunks[kind]:
+                    kind_gates = torch.cat(action_gate_chunks[kind])
+                    kind_gaps = torch.cat(action_gap_chunks[kind])
+                    metrics[f"opsd/{label}/selected_tokens"] = float(kind_gates.numel())
+                    metrics[f"opsd/{label}/gate_mean"] = float(kind_gates.mean().item())
+                    metrics[f"opsd/{label}/signed_gap_mean"] = float(kind_gaps.mean().item())
         return loss, metrics
 
     return loss_fn
@@ -1074,6 +1279,28 @@ def opsd_mask_float_lists(items: list[TrainingDatum]) -> list[list[float]]:
     values: list[list[float]] = []
     for item in items:
         values.append([float(value) for value in _require_opsd_mask(item)])
+    return values
+
+
+def opsd_action_kind_lists(items: list[TrainingDatum]) -> list[list[int]]:
+    """Mark sampled search, answer, and invalid assistant targets for diagnostics."""
+    values: list[list[int]] = []
+    for item in items:
+        trajectory = item.trajectory
+        if trajectory is None:
+            raise ValueError("OPSD action diagnostics require trajectory metadata")
+        events = [event for event in trajectory.events if event.get("role") == "assistant"]
+        if len(events) != len(trajectory.turns):
+            raise ValueError("assistant events and turns differ")
+        kinds = [0] * len(_require_opsd_mask(item))
+        for turn, event in zip(trajectory.turns, events, strict=True):
+            start = len(turn.prompt_tokens) - 1
+            end = start + len(turn.completion_tokens)
+            if start < 0 or end > len(kinds):
+                raise ValueError("assistant action kind does not align with targets")
+            kind = {"tool": 1, "answer": 2}.get(event.get("parsed_kind"), 3)
+            kinds[start:end] = [kind] * len(turn.completion_tokens)
+        values.append(kinds)
     return values
 
 
@@ -1156,6 +1383,17 @@ def rollout_metrics(
     }
     metrics.update(_behavior_metrics(trajectories))
     metrics.update(_turn_credit_metrics(trajectories, turn_credit_policy))
+    skill_datums = [item for item in datums if item.skill_id is not None]
+    if skill_datums:
+        metrics["opsd/teacher_calls"] = float(sum(item.teacher_calls for item in skill_datums))
+        metrics["opsd/teacher_seconds"] = sum(item.teacher_seconds for item in skill_datums)
+        metrics["opsd/teacher_context_skips"] = float(
+            sum(item.opsd_skip_reason == "teacher_context_limit" for item in skill_datums)
+        )
+        for skill_id in sorted({item.skill_id for item in skill_datums}):
+            metrics[f"opsd/skill/{skill_id}/datums"] = float(
+                sum(item.skill_id == skill_id for item in skill_datums)
+            )
     return metrics
 
 
@@ -1258,13 +1496,43 @@ def _turn_credit_metrics(
 def merge_trainer_metrics(results: list[Any]) -> dict[str, float]:
     """Merge numeric metrics returned by PyTRIO forward/backward calls."""
     values: dict[str, list[float]] = defaultdict(list)
-    for result in results:
-        for key, value in dict(result.metrics).items():
-            if isinstance(value, (int, float, np.number)):
-                values[key].append(float(value))
+    rows = [
+        {
+            key: float(value)
+            for key, value in dict(result.metrics).items()
+            if isinstance(value, (int, float, np.number))
+        }
+        for result in results
+    ]
+    for row in rows:
+        for key, value in row.items():
+            values[key].append(value)
     merged: dict[str, float] = {}
     for key, items in values.items():
-        if key in {"loss_mean", "loss/mean"}:
+        if key == "opsd/mask_rate":
+            selected = sum(row.get("opsd/masked_tokens", 0.0) for row in rows)
+            total = sum(row.get("opsd/total_tokens", 0.0) for row in rows)
+            merged[f"trainer/{key}"] = selected / total if total else 0.0
+        elif key.endswith(("/gate_mean", "/signed_gap_mean")) or key in {
+            "opsd/teacher_logprob_mean", "opsd/student_teacher_gap_mean",
+            "opsd/positive_gap_fraction",
+        }:
+            category = key.split("/")[1]
+            count_key = (
+                f"opsd/{category}/selected_tokens"
+                if category in {"search", "answer", "invalid"}
+                else "opsd/masked_tokens"
+            )
+            weighted = [(row[key], row.get(count_key, 0.0)) for row in rows if key in row]
+            weight = sum(count for _, count in weighted)
+            merged[f"trainer/{key}"] = (
+                sum(value * count for value, count in weighted) / weight
+                if weight else mean(items)
+            )
+        elif key.endswith("/selected_tokens") or key in {
+            "loss_mean", "loss/mean", "opsd/loss_mean",
+            "opsd/masked_tokens", "opsd/selected_trajectories", "opsd/total_tokens",
+        }:
             merged[f"trainer/{key}"] = sum(items)
         else:
             merged[f"trainer/{key}"] = mean(items)

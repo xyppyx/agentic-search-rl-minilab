@@ -1,12 +1,12 @@
 # Project Completed
 
-本文件记录当前可引用的已完成事实、产物、结果和最终决策。方法切换前快照位于 `docs/status/archive/2026-10-08_pre_skill_opsd/`；历史快照仅供追溯，不作为当前状态事实源。
+本文件记录当前可引用的已完成事实、产物、结果和最终决策。压缩前快照位于 `docs/status/archive/2026-09-16_pre_next_experiments/`；更早快照仍在 `docs/status/archive/`，仅供历史追溯，不作为当前状态事实源。
 
 ## 当前结论快照
 
-截至 2026-10-08，项目在 Search-R1 MiniLab 中开发 Skill 条件 OPSD；其代码已通过本地测试，但尚未进行固定 checkpoint 审计、真实 PyTRIO 训练或新方法评测。以下数值仍是旧门控辅助路线的已验证 baseline。
+截至 2026-09-16，项目主线是 Search-R1 MiniLab：在 `Qwen/Qwen3.5-4B`、PyTRIO GRPO 和真实/可模拟搜索工具环境下，构建可观测、可诊断、可复盘的搜索型 Agentic RL 小预算实验框架。
 
-旧方法已验证路线为：
+当前最终路线固定为：
 
 ```text
 turn-credit-final-hop-guardfix-20step-20260806
@@ -22,7 +22,6 @@ turn-credit-final-hop-guardfix-20step-20260806
 - 当前结论不包装成大规模充分训练、完整 test 结论或 SOTA；正式效果优先使用 tool failures 为 0 的 clean run。
 - Same-context OPSD 在 base 起点收益不足；OPSD v2 只在 guard-fix 强 checkpoint 上作为小系数 gated auxiliary objective 保留。
 - 已验证过“更多训练步数不必然更好”：20-step OPSD v2 方差对照 bridge macro EM 略高，但 correct、format、search 综合弱于 5-step。
-- Skill 条件 OPSD 目前只有代码与本地测试证据，不能把旧路线 EM、format 或搜索成本归因给新方法。
 
 ## 数据与训练量
 
@@ -76,9 +75,9 @@ turn-credit-final-hop-guardfix-20step-20260806
 - Gated OPSD v2：`--opsd-coef`、`--opsd-mask-policy`、`--opsd-positive-policy`、teacher logprob 对齐、OPSD mask 指标和 custom loss。
 - 长评测恢复：`eval_pytrio.py --offset` 支持分片恢复；分片仅用于 eval clean chunk 协议，不用于拼接训练。
 - 面试/展示材料：已整理数据指标、turn-level credit、Gated OPSD、GRPO/OPSD 问答和简历项目表述；公开边界已统一到小预算 POC 口径。
-- 面试与方案资料：`docs/resume/docs/search_r1_dev_intern_notes.md` 保留旧门控辅助口径；`docs/interview/future/sdar_skill_conditioned_opsd_plan.md` 记录 Skill OPSD 设计；`docs/interview/future/baoyan-resume-template/main.tex` 明确把 350 条旧路线数字标为新方案指标占位。
-- 2026-10-08 Skill OPSD 代码接入：新增 `my-search-r1/configs/opsd_skills.json` 和 `search_r1_minilab/skills.py`，在 `protocol.py`、`training.py`、`scripts/train_pytrio.py` 接入 teacher-only Skill、同一步 snapshot 逐轮打分、signed-gap gate 与 GRPO/KL 联合 loss，显式保留旧 same-context 路径。`PYTHONPATH=my-search-r1 uv run python -m unittest my-search-r1/tests/test_rollout_training.py -q` 通过 50 项、全目录通过 103 项，CLI help 正常；详见 `docs/interview/lesson/2026-10-08_skill_opsd_code_integration.md`。未运行新方法训练或评测。
-- 2026-10-08 简历模板同步：`docs/interview/future/baoyan-resume-template/main.tex` 已把新方法写为代码接入，并将 350 条评测第三组数字明确标为原门控辅助训练的 Skill OPSD 占位指标；`latexmk -pdfxe` 编译生成单页 A4 PDF，未见 LaTeX 报错或溢出。
+- 2026-09-23 实习简历项目表述：更新 `docs/resume/intern/实习_开发岗/main.tex`，保留个人科研项目与算法岗倾向，展开研究问题、GRPO 训练、轮次信用分配、门控辅助训练、评测诊断及三阶段结果六点；证据与追问见 `docs/resume/docs/search_r1_dev_intern_notes.md`。已核对实现、门控 loss 口径和既有指标，`latexmk -xelatex` 生成同目录单页 `main.pdf`，无溢出或缺字，其余简历内容与字号未变；本次未重跑训练或模型评测。
+- 2026-10-07 SDAR 未来方案：新增 `docs/interview/future/sdar_skill_conditioned_opsd_plan.md`，记录 skill 卡片、同源 teacher 逐轮打分、gap gate、GRPO 联合损失和对照门槛。已对照 SDAR 原文及当前 `train_pytrio.py`、`training.py`、`rollout.py`、`protocol.py` 检查文档口径；未实现新训练能力，未运行训练或评测。
+- 2026-10-07—08 未来简历模板：更新 `docs/interview/future/baoyan-resume-template/main.tex` 的个人科研项目表述，小标题为“错误归因与 OPSD 设计”，正文说明轮次奖励在下一跳与停止判断上的不足，再展开 bad case、共性错误、Skill 和拟议 OPSD 方案；350 条定向评测数字明确归因于原门控辅助训练，并在括号中标为 Skill 条件 OPSD 指标占位。`latexmk -pdfxe` 编译通过，生成单页 A4 PDF，未见溢出；未运行新 OPSD 训练或评测。
 
 ## 当前公开边界
 
